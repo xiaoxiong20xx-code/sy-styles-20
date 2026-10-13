@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>16 真实页面 2.5D 推镜 · Page Camera</title>
+<script src="../../lib/core.js"></script>
+<style>
+  #stage{font-family:Inter,'Noto Sans CJK SC',sans-serif;perspective:2200px;perspective-origin:50% 46%;overflow:hidden}
+  #bg{position:absolute;inset:0;background:radial-gradient(1300px 800px at 50% 40%,#232a3f 0%,#0b0d14 72%)}
+  #glow{position:absolute;left:260px;top:120px;width:1400px;height:840px;border-radius:50%;background:radial-gradient(closest-side,rgba(92,120,255,.35),rgba(92,120,255,0));filter:blur(40px)}
+  #ui{position:absolute;left:160px;top:90px;width:1600px;height:900px;transform-style:preserve-3d}
+  .pn{position:absolute;border-radius:18px;background:rgba(22,24,32,.96);border:1px solid rgba(255,255,255,.07);box-shadow:0 40px 90px rgba(0,0,0,.55),inset 0 1px 0 rgba(255,255,255,.05);overflow:hidden;color:#e7e9f0}
+  .hd{height:46px;display:flex;align-items:center;padding:0 18px;gap:10px;font-size:15px;font-weight:600;color:#aab0c0;border-bottom:1px solid rgba(255,255,255,.06)}
+  .dot{width:11px;height:11px;border-radius:50%}
+  .thumb{position:absolute;width:150px;height:84px;border-radius:9px;overflow:hidden;background:#000}
+  .thumb canvas,.thumb img{width:100%;height:100%;display:block;object-fit:cover}
+  .lab{position:absolute;font-size:12px;color:#8b92a6}
+  .trk{position:absolute;left:96px;right:16px;height:56px;border-radius:9px;background:rgba(255,255,255,.035)}
+  .tl{position:absolute;left:16px;width:70px;font:600 12px Inter;color:#7d849a}
+  .clip{position:absolute;top:4px;height:48px;border-radius:7px;overflow:hidden;box-shadow:0 0 0 2px rgba(255,255,255,.08) inset}
+  .cap{position:absolute;top:10px;height:36px;border-radius:7px;background:linear-gradient(135deg,#ffb84d,#ff7a3d);color:#2a1300;font:700 14px 'Noto Sans CJK SC';display:flex;align-items:center;padding:0 12px;white-space:nowrap;overflow:hidden}
+  .sl{position:absolute;left:22px;right:22px;height:6px;border-radius:3px;background:rgba(255,255,255,.1)}
+  .sl i{position:absolute;left:0;top:0;bottom:0;border-radius:3px;background:linear-gradient(90deg,#5b7cff,#9b6bff)}
+  .sl b{position:absolute;top:-7px;width:20px;height:20px;border-radius:50%;background:#fff;box-shadow:0 2px 8px rgba(0,0,0,.4)}
+  .prop{position:absolute;left:22px;font-size:14px;color:#aeb4c5}
+  #ai{position:absolute;right:26px;top:7px;height:34px;padding:0 18px;border-radius:17px;background:linear-gradient(135deg,#6a7cff,#a35cff);color:#fff;font:700 15px 'Noto Sans CJK SC';display:flex;align-items:center;gap:8px;box-shadow:0 6px 24px rgba(123,92,255,.55)}
+  #cursor{position:absolute;width:34px;height:34px;z-index:50;transform-style:preserve-3d}
+  #ring{position:absolute;border:3px solid #9b8cff;border-radius:50%}
+  #title{position:absolute;left:0;right:0;top:952px;text-align:center;font:900 46px 'Noto Sans CJK SC';color:#fff;letter-spacing:.08em}
+  #title small{font:600 17px Inter;letter-spacing:.5em;color:#8f97b3;margin-left:18px}
+</style></head>
+<body><div id="stage"></div>
+<script>
+/* ===== 16 真实页面 · 2.5D 推镜 · PAGE CAMERA =====
+   A real, working-looking editing app built in DOM. The camera pulls the UI apart into floating layers
+   (2.5D), racks focus between them, a cursor clicks "AI 一键成片", clips (the reel's own rendered shots)
+   fly onto the timeline, captions drop in, the monitor plays, and the camera pushes into the monitor. */
+const { E, clamp, inv, lerp, spring } = Reel;
+const stage = Reel.makeStage('#0b0d14');
+const C = Reel.cfg({ app: '肖雄剪辑台', ai: 'AI 一键成片', title: '真实页面 · 2.5D 推镜', titleEn: 'PAGE CAMERA' });
+stage.innerHTML = `<div id="bg"></div><div id="glow"></div><div id="ui"></div><div id="title">${C.title}<small>${C.titleEn}</small></div>`;
+const ui = stage.querySelector('#ui');
+const M = (f) => `media/${f}.jpg`;
+const THUMBS = ['t01_150', 't02_150', 't13_120', 't14_120', 't04_200', 't03_160', 't01_240', 't02_270', 't13_250', 't14_290'];
+// ---------- panels ----------
+function panel(id, x, y, w, h, title, extra = '') {
+  const d = document.createElement('div'); d.className = 'pn'; d.id = id;
+  d.style.cssText = `left:${x}px;top:${y}px;width:${w}px;height:${h}px`;
+  d.innerHTML = `<div class="hd">${title}${extra}</div>`;
+  ui.appendChild(d); return d;
+}
+const topBar = panel('top', 0, 0, 1600, 52, `<span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#febc2e"></span><span class="dot" style="background:#28c840"></span>
+  <span style="margin-left:18px;color:#e7e9f0;font-weight:800">${C.app}</span><span style="margin-left:14px;font-weight:500;color:#6f7690">· 20种视频风格.proj</span>`,
+  `<div id="ai"><svg width="18" height="18" viewBox="0 0 24 24"><path fill="#fff" d="M12 2l2.2 6.3L20 10l-5.8 1.7L12 18l-2.2-6.3L4 10l5.8-1.7z"/></svg>${C.ai}</div>`);
+topBar.querySelector('.hd').style.cssText += ';height:52px;border:0;position:relative';
+const lib = panel('lib', 0, 66, 360, 520, '媒体库 · MEDIA');
+const mon = panel('mon', 374, 66, 852, 520, '预览 · PREVIEW');
+const ins = panel('ins', 1240, 66, 360, 520, '属性 · INSPECTOR');
+const tl = panel('tl', 0, 600, 1600, 300, '时间线 · TIMELINE');
+// library thumbnails (images)
+THUMBS.slice(0, 8).forEach((f, i) => {
+  const d = document.createElement('div'); d.className = 'thumb'; d.style.left = (22 + (i % 2) * 168) + 'px'; d.style.top = (64 + Math.floor(i / 2) * 110) + 'px';
+  d.innerHTML = `<img src="${M(f)}">`; lib.appendChild(d);
+  const l = document.createElement('div'); l.className = 'lab'; l.style.left = (24 + (i % 2) * 168) + 'px'; l.style.top = (64 + Math.floor(i / 2) * 110 + 88) + 'px';
+  l.textContent = ['逐帧手绘', '等轴城市', '像素冒险', '液态金属', '线条远方', '扁平一镜', '黄昏小屋', '夜景城市'][i] + '.mp4'; lib.appendChild(l);
+});
+// monitor
+const mc = document.createElement('canvas'); mc.width = 640; mc.height = 360;
+mc.style.cssText = 'position:absolute;left:42px;top:66px;width:768px;height:432px;border-radius:10px;background:#000';
+mon.appendChild(mc);
+const mctx = mc.getContext('2d');
+const tc = document.createElement('div'); tc.style.cssText = 'position:absolute;left:42px;top:504px;font:600 13px Inter;color:#8b92a6'; mon.appendChild(tc);
+// inspector
+const props = [['不透明度', 0.92], ['缩放', 0.64], ['运动模糊', 0.4], ['调色 · 暖', 0.7], ['字幕描边', 0.55]];
+props.forEach(([n, v], i) => {
+  const p = document.createElement('div'); p.className = 'prop'; p.style.top = (70 + i * 84) + 'px'; p.textContent = n; ins.appendChild(p);
+  const s = document.createElement('div'); s.className = 'sl'; s.style.top = (104 + i * 84) + 'px'; s.innerHTML = `<i style="width:${v * 100}%"></i><b style="left:calc(${v * 100}% - 10px)"></b>`; ins.appendChild(s);
+});
+// timeline tracks
+const tracks = [['V2', 70], ['V1', 132], ['字幕', 194], ['音乐', 252]];
+tracks.forEach(([n, y]) => { const t = document.createElement('div'); t.className = 'trk'; t.style.top = y + 'px'; tl.appendChild(t); const l = document.createElement('div'); l.className = 'tl'; l.style.top = (y + 20) + 'px'; l.textContent = n; tl.appendChild(l); });
+// clips that will fly in (V1 and V2), captions, music waveform
+const CLIPS = [];
+const plan = [[0, 1, 96, 230], [1, 1, 330, 200], [2, 1, 534, 250], [3, 1, 788, 220], [4, 1, 1012, 260], [5, 1, 1276, 300], [6, 0, 150, 180], [7, 0, 700, 240]];
+plan.forEach(([k, row, x, w], i) => {
+  const d = document.createElement('div'); d.className = 'clip';
+  d.style.cssText += `;left:${x}px;width:${w}px;top:${tracks[row][1] + 4}px`;
+  // filmstrip of the thumbnail repeated
+  let html = '';
+  for (let j = 0; j * 86 < w; j++) html += `<img src="${M(THUMBS[k])}" style="position:absolute;left:${j * 86}px;top:0;width:86px;height:48px;object-fit:cover;opacity:${j ? 0.85 : 1}">`;
+  d.innerHTML = html + `<div style="position:absolute;left:0;top:0;bottom:0;width:3px;background:#fff;opacity:.7"></div>`;
+  tl.appendChild(d); CLIPS.push({ d, x, row, i });
+});
+const CAPS = [[110, '先打铅笔稿'], [420, '一秒重画 12 张'], [760, '镜头一动'], [1080, '原来是立体的！']];
+const capEls = CAPS.map(([x, s]) => { const d = document.createElement('div'); d.className = 'cap'; d.style.left = x + 'px'; d.style.top = (tracks[2][1] + 10) + 'px'; d.textContent = s; tl.appendChild(d); return d; });
+const wave = document.createElement('canvas'); wave.width = 1480; wave.height = 48;
+wave.style.cssText = `position:absolute;left:100px;top:${tracks[3][1] + 4}px;width:1480px;height:48px`; tl.appendChild(wave);
+{ const w = wave.getContext('2d'); w.fillStyle = 'rgba(80,220,170,.75)'; for (let x = 0; x < 1480; x += 4) { const a = 8 + 20 * Math.abs(Math.sin(x * 0.031) * Math.sin(x * 0.0073 + 1)) + 6 * Math.random(); w.fillRect(x, 24 - a / 2, 2.5, a); } }
+const head = document.createElement('div'); head.style.cssText = 'position:absolute;top:56px;bottom:8px;width:2px;background:#ff4d6d;box-shadow:0 0 12px #ff4d6d;z-index:5'; tl.appendChild(head);
+// cursor
+const cur = document.createElement('div'); cur.id = 'cursor';
+cur.innerHTML = `<svg width="34" height="34" viewBox="0 0 24 24"><path d="M4 2l15 9-7 1.6L8.8 20z" fill="#fff" stroke="#111" stroke-width="1.4" stroke-linejoin="round"/></svg>`;
+ui.appendChild(cur);
+const ring = document.createElement('div'); ring.id = 'ring'; ui.appendChild(ring);
+
+// ---------- preload the monitor clip ----------
+const FR = [];
+async function setup() {
+  await Promise.all(Array.from({ length: 75 }, (_, k) => new Promise((res) => { const im = new Image(); im.onload = res; im.onerror = res; im.src = `media/p${String(k).padStart(3, '0')}.jpg`; FR[k] = im; })));
+  await Promise.all([...document.images].map((im) => (im.complete ? 0 : new Promise((r) => { im.onload = r; im.onerror = r; }))));
+}
+// ---------- choreography ----------
+const Z = { top: 30, lib: -70, mon: 0, ins: -40, tl: 90 };
+const cue = (t, a, d = 0.6) => E.inOutCubic(clamp((t - a) / d));
+Reel.scene({
+  duration: 10, fps: 30,
+  fonts: ['600 15px Inter', '700 15px "Noto Sans CJK SC"', '900 46px "Noto Sans CJK SC"'],
+  setup,
+  cues: [{ t: 0.2, sfx: 'whoosh' }, { t: 1.4, sfx: 'swell' }, { t: 3.75, sfx: 'click' }, { t: 3.85, sfx: 'sparkle' }, { t: 4.1, sfx: 'pop' }, { t: 4.4, sfx: 'pop' }, { t: 4.7, sfx: 'pop' }, { t: 6.6, sfx: 'zoom' }, { t: 8.7, sfx: 'chime' }],
+  render(t) {
+    // panels fly in, then separate into layers
+    const sep = cue(t, 1.2, 1.4) * (1 - cue(t, 6.4, 1.4));
+    const assemble = ['top', 'lib', 'mon', 'ins', 'tl'];
+    assemble.forEach((id, i) => {
+      const el = document.getElementById(id);
+      const a = spring(t - 0.1 - i * 0.08, { k: 120, c: 16 });
+      const z = Z[id] * sep * 2.2 + (1 - clamp(a)) * -600;
+      el.style.transform = `translateZ(${z}px) translateY(${(1 - clamp(a)) * 40}px)`;
+      el.style.opacity = clamp(a * 1.4);
+    });
+    // camera: tilt to reveal the layers, rack focus, then push into the monitor
+    const ry = -19 * sep, rx = 8 * sep;
+    const push = cue(t, 6.5, 1.6);
+    const sc = lerp(0.82, 1.0, cue(t, 0, 1.2)) * lerp(1, 0.88, sep) * lerp(1, 1.55, push);
+    const tx = lerp(0, -160, push) + 30 * sep, ty = lerp(0, 120, push) + 70 * sep;
+    ui.style.transform = `translate(${tx}px,${ty}px) scale(${sc}) rotateX(${rx}deg) rotateY(${ry}deg)`;
+    // depth of field: focus moves from the timeline (3-6s) to the monitor (6.5+)
+    const focus = t < 5.8 ? Z.tl : lerp(Z.tl, Z.mon, cue(t, 5.8, 0.8));
+    assemble.forEach((id) => { const el = document.getElementById(id); const b = Math.abs(Z[id] - focus) * 0.045 * sep; el.style.filter = b > 0.2 ? `blur(${b.toFixed(2)}px)` : 'none'; });
+    // cursor path: to the AI button, click at 3.75, then to the timeline
+    const p0 = [900, 760], p1 = [1440, 26], p2 = [760, 740];
+    const u1 = cue(t, 2.4, 1.2), u2 = cue(t, 4.2, 1.1);
+    const cx = lerp(lerp(p0[0], p1[0], u1), p2[0], u2), cy = lerp(lerp(p0[1], p1[1], u1), p2[1], u2);
+    const press = t > 3.72 && t < 3.86 ? 0.85 : 1;
+    cur.style.transform = `translate(${cx}px,${cy}px) translateZ(140px) scale(${press})`;
+    cur.style.opacity = clamp((t - 2.2) * 4) * (1 - clamp((t - 6.6) * 3));
+    const rr = clamp((t - 3.75) / 0.45);
+    ring.style.cssText = `left:${1440 - 60 * rr}px;top:${26 - 60 * rr}px;width:${120 * rr}px;height:${120 * rr}px;opacity:${t > 3.75 ? 1 - rr : 0};transform:translateZ(130px)`;
+    document.getElementById('ai').style.transform = `scale(${t > 3.72 && t < 3.9 ? 0.94 : 1})`;
+    // clips fly onto the timeline after the click
+    CLIPS.forEach((c, i) => {
+      const a = spring(t - 3.95 - i * 0.12, { k: 180, c: 14 });
+      c.d.style.transform = `translate(${(1 - clamp(a)) * 220}px, ${(1 - clamp(a)) * -260}px) scale(${0.6 + 0.4 * clamp(a)})`;
+      c.d.style.opacity = clamp(a * 3);
+    });
+    capEls.forEach((d, i) => { const a = spring(t - 5.0 - i * 0.15, { k: 220, c: 13 }); d.style.transform = `scale(${clamp(a, 0, 1.2)})`; d.style.opacity = clamp(a * 3); });
+    wave.style.clipPath = `inset(0 ${100 - 100 * cue(t, 4.6, 1.0)}% 0 0)`;
+    // playhead + monitor
+    const play = t > 5.4;
+    const ph = play ? (t - 5.4) / 4.6 : 0;
+    head.style.left = (96 + ph * 1480) + 'px';
+    const k = Math.min(74, Math.floor(Math.max(0, t - (play ? 5.4 : 99)) * 15)) ;
+    const im = FR[play ? k : 0];
+    if (im && im.complete) mctx.drawImage(im, 0, 0, 640, 360);
+    else { mctx.fillStyle = '#000'; mctx.fillRect(0, 0, 640, 360); }
+    if (!play) { mctx.fillStyle = 'rgba(0,0,0,.45)'; mctx.fillRect(0, 0, 640, 360); mctx.fillStyle = '#fff'; mctx.beginPath(); mctx.moveTo(300, 150); mctx.lineTo(350, 180); mctx.lineTo(300, 210); mctx.fill(); }
+    const s = play ? (t - 5.4) : 0;
+    tc.textContent = `00:00:${String(Math.floor(s)).padStart(2, '0')}:${String(Math.floor((s % 1) * 30)).padStart(2, '0')}  /  00:00:10:00`;
+    const tt = document.getElementById('title');
+    const ta = cue(t, 8.4, 0.6); tt.style.opacity = ta; tt.style.transform = `translateY(${(1 - ta) * 16}px)`;
+  },
+});
+</script></body></html>
