@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>06 形变动画 · Particle Morph</title>
+<script src="../../lib/core.js"></script>
+</head><body><div id="stage"></div>
+<script>
+/* ===== 06 形变动画 · Particle Morph =====
+   Seven thousand points of light in 3D. They drift as a nebula, then keep becoming the next shape:
+   想法 → a lightbulb → 作品 → a play button → 爆款. Every transition swirls through a curl-noise wind,
+   staggered left to right, and lands with a spring. The camera orbits so the shapes read as sculptures in space. */
+const C = Reel.cfg({ words: ['想法', '作品', '爆款'], sub: 'SHAPE  ·  MORPH' });
+const { E, clamp, inv, lerp, spring } = Reel;
+const stage = Reel.makeStage('#070814');
+const { ctx: mainCtx, begin: mainBegin } = Reel.canvas2d(stage);
+const glowL = Reel.canvas2d(null);   // particles are drawn here first, then composited with a soft glow
+let ctx = glowL.ctx;
+const N = 12000;
+
+/* deterministic random */
+let seed = 1234567; const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296);
+
+/* sample N points inside a shape drawn on an offscreen canvas; returns Float32Array xyz (world units) */
+function samplePoints(drawFn, scale, depth) {
+  const cw = 1000, ch = 520, cv = document.createElement('canvas'); cv.width = cw; cv.height = ch;
+  const g = cv.getContext('2d'); g.fillStyle = '#fff'; g.strokeStyle = '#fff'; drawFn(g, cw, ch);
+  const d = g.getImageData(0, 0, cw, ch).data, pts = [], edge = [];
+  const A = (x, y) => (x < 0 || y < 0 || x >= cw || y >= ch) ? 0 : d[(y * cw + x) * 4 + 3];
+  for (let y = 0; y < ch; y += 2) for (let x = 0; x < cw; x += 2) if (A(x, y) > 128) {
+    pts.push([x, y]);
+    if (A(x - 3, y) < 128 || A(x + 3, y) < 128 || A(x, y - 3) < 128 || A(x, y + 3) < 128) edge.push([x, y]);
+  }
+  const out = new Float32Array(N * 3);
+  for (let i = 0; i < N; i++) {
+    const p = (rnd() < 0.38 && edge.length) ? edge[Math.floor(rnd() * edge.length)] : pts[Math.floor(rnd() * pts.length)];
+    out[i * 3] = (p[0] + rnd() * 2 - cw / 2) * scale;
+    out[i * 3 + 1] = -(p[1] + rnd() * 2 - ch / 2) * scale;
+    out[i * 3 + 2] = (rnd() - 0.5) * depth;
+  }
+  return out;
+}
+const word = (txt) => (g, w, h) => { g.font = '900 300px "Noto Sans CJK SC"'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(txt, w / 2, h / 2 + 10); };
+const bulb = (g, w, h) => {
+  g.save(); g.translate(w / 2, h / 2 - 20);
+  g.beginPath(); g.arc(0, -40, 150, Math.PI * 0.8, Math.PI * 2.2); g.lineTo(60, 120); g.lineTo(-60, 120); g.closePath(); g.fill();
+  for (let i = 0; i < 3; i++) g.fillRect(-62, 135 + i * 28, 124, 18);
+  g.globalCompositeOperation = 'destination-out'; g.lineWidth = 16; g.beginPath(); g.moveTo(-30, 110); g.lineTo(-30, 20); g.lineTo(0, 50); g.lineTo(30, 20); g.lineTo(30, 110); g.stroke();
+  g.restore();
+};
+const play = (g, w, h) => { g.save(); g.translate(w / 2, h / 2); g.beginPath(); g.roundRect(-230, -190, 460, 380, 90); g.fill();
+  g.globalCompositeOperation = 'destination-out'; g.beginPath(); g.moveTo(-60, -95); g.lineTo(110, 0); g.lineTo(-60, 95); g.closePath(); g.lineJoin = 'round'; g.lineWidth = 30; g.stroke(); g.fill(); g.restore(); };
+
+let SH = null;   // shapes (built after fonts load)
+const PAL = [[90, 230, 220], [255, 214, 102], [255, 120, 160], [140, 120, 255], [255, 186, 74]];
+const PAL2 = [[120, 160, 255], [255, 150, 90], [190, 120, 255], [90, 210, 255], [255, 236, 160]];
+const T_FORM = [0.55, 2.0, 3.45, 4.9, 6.35];     // when each shape starts forming
+const DUR = 1.0;
+
+/* noise for swirl */
+const nz = (x, y, z) => Math.sin(x * 1.7 + Math.sin(y * 2.3 + z)) * Math.cos(y * 1.3 - Math.sin(z * 1.9 + x));
+function curl(x, y, z) {
+  const e = 0.08;
+  return [nz(x, y + e, z) - nz(x, y - e, z), nz(x, y, z + e) - nz(x, y, z - e), nz(x + e, y, z) - nz(x - e, y, z)];
+}
+
+/* sprites */
+function sprite(r, soft) { const c = document.createElement('canvas'); c.width = c.height = r * 2; const g = c.getContext('2d'); const gr = g.createRadialGradient(r, r, 0, r, r, r);
+  gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(soft, 'rgba(255,255,255,.35)'); gr.addColorStop(1, 'rgba(255,255,255,0)'); g.fillStyle = gr; g.fillRect(0, 0, r * 2, r * 2); return c; }
+const tint = {};
+function tinted(rgb, r, soft) { const key = rgb.join(',') + r; if (tint[key]) return tint[key]; const s = sprite(r, soft); const g = s.getContext('2d'); g.globalCompositeOperation = 'source-atop'; g.fillStyle = `rgb(${rgb})`; g.fillRect(0, 0, r * 2, r * 2); return (tint[key] = s); }
+
+const NEB = new Float32Array(N * 3), PHASE = new Float32Array(N), SIZE = new Float32Array(N);
+for (let i = 0; i < N; i++) {   // a two-armed spiral galaxy, seen slightly from above
+  const arm = i % 2, r = Math.pow(rnd(), 0.6) * 4.2, a = arm * Math.PI + r * 1.25 + (rnd() - 0.5) * (0.6 + 0.25 * r);
+  const sc = (rnd() - 0.5) * 0.35 * (1 + r * 0.2);
+  NEB[i * 3] = (Math.cos(a) * r + sc) * 1.3; NEB[i * 3 + 2] = (Math.sin(a) * r * 0.55 + sc) * 1.3; NEB[i * 3 + 1] = ((rnd() - 0.5) * 0.25 * Math.exp(-r * 0.4) + Math.sin(a) * r * 0.18) * 1.3 - 0.35;
+  PHASE[i] = rnd() * 6.28; SIZE[i] = 0.55 + Math.pow(rnd(), 3) * 1.6; }
+
+Reel.scene({
+  duration: 10, fps: 30,
+  fonts: ['900 300px "Noto Sans CJK SC"', '300 20px Inter'],
+  cues: [{ t: 0.3, sfx: 'swell' }, ...T_FORM.map((m) => ({ t: m + 0.05, sfx: 'morph' })), { t: 6.95, sfx: 'impact_soft' }, { t: 7.0, sfx: 'sparkle' }],
+  setup() {
+    SH = [samplePoints(word(C.words[0]), 0.0105, 0.16), samplePoints(bulb, 0.011, 0.22), samplePoints(word(C.words[1]), 0.0105, 0.16), samplePoints(play, 0.0098, 0.2), samplePoints(word(C.words[2]), 0.0118, 0.18)];
+  },
+  render(t) {
+    glowL.begin(); ctx = glowL.ctx; ctx.clearRect(0, 0, 1920, 1080);
+    // which shapes are we between?
+    let k = -1; for (let i = 0; i < T_FORM.length; i++) if (t >= T_FORM[i]) k = i;
+    const yaw = 0.35 * Math.sin(t * 0.55) - 0.1, pitch = 0.08 * Math.sin(t * 0.4);
+    const cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
+    const camZ = 7.2, F = 1150;
+    ctx.globalCompositeOperation = 'lighter';
+    const burst = Math.exp(-Math.pow((t - 6.95) / 0.25, 2));
+    const col = (a, b, u) => [lerp(a[0], b[0], u) | 0, lerp(a[1], b[1], u) | 0, lerp(a[2], b[2], u) | 0];
+    for (let i = 0; i < N; i++) {
+      let x, y, z;
+      const src = k <= 0 ? NEB : SH[k - 1], dst = k < 0 ? NEB : SH[k];
+      const ga = t * 0.35;
+      // staggered progress left -> right (based on destination x)
+      const sx = k < 0 ? 0 : dst[i * 3];
+      const t0 = k < 0 ? 0 : T_FORM[k] + (sx + 5) * 0.045;
+      const raw = k < 0 ? 0 : clamp((t - t0) / DUR);
+      const u = raw <= 0 ? 0 : raw >= 1 ? 1 : E.inOutCubic(raw);
+      const s0 = (k === 0 ? NEB : src);
+      let ax = s0[i * 3], ay = s0[i * 3 + 1], az = s0[i * 3 + 2];
+      if (k <= 0) { const c2 = Math.cos(ga), s2 = Math.sin(ga); const nx = ax * c2 - az * s2; az = ax * s2 + az * c2; ax = nx; }
+      x = lerp(ax, dst[i * 3], u); y = lerp(ay, dst[i * 3 + 1], u); z = lerp(az, dst[i * 3 + 2], u);
+      if (k < 0) { x = ax; y = ay; z = az; }
+      // swirl during the transition + idle shimmer
+      const sw = Math.sin(Math.PI * u) * 1.35;
+      if (sw > 0.001) { const c = curl(x * 0.5 + t * 0.3, y * 0.5, z * 0.5 + PHASE[i]); x += c[0] * sw; y += c[1] * sw; z += c[2] * sw; }
+      x += Math.sin(t * 1.3 + PHASE[i]) * 0.012; y += Math.cos(t * 1.1 + PHASE[i] * 1.3) * 0.012;
+      if (k === 4) { const b = burst * 0.9; x *= 1 + b * 0.25 * SIZE[i]; y *= 1 + b * 0.25 * SIZE[i]; z += b * (PHASE[i] - 3) * 0.3; }
+      // spring overshoot on landing
+      if (raw >= 1) { const st = t - t0 - DUR; const sp2 = Math.exp(-st * 7) * Math.sin(st * 22) * 0.04; x *= 1 + sp2; y *= 1 + sp2; }
+      // camera
+      const xr = x * cy + z * sy, zr = -x * sy + z * cy;
+      const yr = y * cp - zr * sp, zz = y * sp + zr * cp;
+      const d = camZ - zz; if (d < 0.5) continue;
+      const px = 960 + F * xr / d, py = 520 - F * yr / d;
+      const depthBlur = Math.min(1, Math.abs(d - camZ) / 2.6) * (raw > 0 && raw < 1 ? 1 : 0.35);
+      const cA = PAL[Math.max(0, k)], cB = PAL[Math.max(0, Math.min(4, k))];
+      const hx = clamp((x + 5) / 10);
+      const cc = (j) => col(PAL[j], PAL2[j], hx);
+      const c = k <= 0 ? cc(0) : col(cc(k - 1), cc(k), u);
+      const r = (1.25 + depthBlur * 4.5) * SIZE[i] * (F / d) / 160;
+      const tw = 0.55 + 0.45 * Math.sin(t * 3 + PHASE[i] * 5);
+      ctx.globalAlpha = Math.min(1, (0.62 + 0.38 * tw) * (1 - depthBlur * 0.7) + 0.06);
+      const spr = tinted(c.map((v) => v - (v % 8)), 8, 0.22);
+      ctx.drawImage(spr, px - r * 2, py - r * 2, r * 4, r * 4);
+    }
+    ctx.globalAlpha = 1; ctx.globalCompositeOperation = 'source-over';
+    // composite: background, soft glow (blurred copy), then the sharp particles
+    ctx = mainCtx; mainBegin();
+    const bg = ctx.createRadialGradient(960, 520, 100, 960, 540, 1150);
+    bg.addColorStop(0, '#141a3a'); bg.addColorStop(1, '#05060f');
+    ctx.fillStyle = bg; ctx.fillRect(0, 0, 1920, 1080);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.filter = `blur(${(14 * glowL.k).toFixed(1)}px)`; ctx.globalAlpha = 0.85; ctx.drawImage(glowL.cv, 0, 0);
+    ctx.filter = `blur(${(4 * glowL.k).toFixed(1)}px)`; ctx.globalAlpha = 0.6; ctx.drawImage(glowL.cv, 0, 0);
+    ctx.filter = 'none'; ctx.globalAlpha = 1; ctx.drawImage(glowL.cv, 0, 0);
+    ctx.globalCompositeOperation = 'source-over';
+    mainBegin();
+    // subtitle at the end
+    const sk = E.outCubic(inv(7.1, 7.8, t));
+    if (sk > 0) { ctx.globalAlpha = sk; ctx.font = '300 22px Inter'; ctx.fillStyle = '#ffe6b0'; ctx.textAlign = 'center'; ctx.letterSpacing = '10px'; ctx.fillText(C.sub, 965, 880); ctx.letterSpacing = '0px'; ctx.globalAlpha = 1; }
+    const v = ctx.createRadialGradient(960, 540, 500, 960, 540, 1200); v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,.5)'); ctx.fillStyle = v; ctx.fillRect(0, 0, 1920, 1080);
+    if (t < 0.4) { ctx.fillStyle = `rgba(5,6,15,${1 - t / 0.4})`; ctx.fillRect(0, 0, 1920, 1080); }
+  },
+});
+</script></body></html>

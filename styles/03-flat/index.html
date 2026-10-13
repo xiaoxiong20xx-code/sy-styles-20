@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>03 扁平矢量 · Flat Vector</title>
+<script src="../../lib/core.js"></script>
+</head><body><div id="stage"></div>
+<script>
+/* ===== 03 扁平矢量 · Infinite Zoom =====
+   One continuous zoom through four nested flat illustrations that loop forever:
+   a phone in a hand -> the city on its screen -> a lit window -> the room inside -> the laptop on the desk ->
+   the editor on its screen -> whose preview is the phone in the hand again. Every frame is drawn as vectors. */
+const C = Reel.cfg({ title: '一镜到底', sub: 'INFINITE  ZOOM  ·  FLAT  VECTOR', likes: '10w+' });
+const { E, clamp, inv, lerp } = Reel;
+const stage = Reel.makeStage('#ff6b57');
+const { ctx, begin, k: K0 } = Reel.canvas2d(stage);
+
+let PZ = { on: false, Z: 1, Fx: 0, Fy: 0 };
+function par(p, fn) {          // draw a layer with parallax (only for the level currently filling the screen)
+  if (!PZ.on) return fn();
+  const k = Math.pow(PZ.Z, -p); ctx.save(); ctx.translate(PZ.Fx, PZ.Fy); ctx.scale(k, k); ctx.translate(-PZ.Fx, -PZ.Fy); fn(); ctx.restore();
+}
+const PAL = { coral: '#ff6b57', coral2: '#ff8270', navy: '#1d2a5c', deep: '#141b3d', teal: '#2ec4b6', teal2: '#26a69a', mint: '#a8e6cf',
+  yellow: '#ffd166', pink: '#ff8fab', purple: '#6c5ce7', violet: '#9b7bff', cream: '#fff4e0', orange: '#ff9f43', skin: '#f6b48d', skin2: '#e0956b', white: '#ffffff' };
+const rr = (x, y, w, h, r) => { ctx.beginPath(); ctx.roundRect(x, y, w, h, r); };
+const circ = (x, y, r) => { ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); };
+const fill = (c) => { ctx.fillStyle = c; ctx.fill(); };
+const rngOf = (seed) => { let s = seed >>> 0; return () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296); };
+const heart = (x, y, s) => { ctx.beginPath(); ctx.moveTo(x, y + s * 0.35); ctx.bezierCurveTo(x - s, y - s * 0.35, x - s * 0.45, y - s * 0.95, x, y - s * 0.45); ctx.bezierCurveTo(x + s * 0.45, y - s * 0.95, x + s, y - s * 0.35, x, y + s * 0.35); ctx.closePath(); };
+
+/* ---------------- Level A: a hand holding a phone (landscape) ---------------- */
+const A = { portal: [850, 335, 800, 450], r: 22 };
+function drawA(t) {
+  ctx.fillStyle = PAL.coral; ctx.fillRect(-20, -20, 1960, 1120);
+  circ(1250, 560, 600); fill('#ff7a66'); circ(1250, 560, 430); fill('#ff8672');
+  circ(1720, 170, 120); fill('#ff917f');
+  // floating reactions
+  const fl = (i, x, y) => [x + Math.sin(t * 1.3 + i * 2) * 14, y + Math.sin(t * 1.7 + i) * 18];
+  const fo = 1 - E.inOutCubic(inv(7.25, 7.6, t)); ctx.save(); ctx.globalAlpha = fo;
+  let [x, y] = fl(0, 470, 300); circ(x, y, 58); fill(PAL.white); heart(x, y + 4, 36); fill(PAL.coral);
+  [x, y] = fl(1, 330, 640); circ(x, y, 48); fill(PAL.yellow); ctx.beginPath(); ctx.moveTo(x - 12, y - 20); ctx.lineTo(x + 22, y); ctx.lineTo(x - 12, y + 20); ctx.closePath(); fill(PAL.navy);
+  [x, y] = fl(2, 600, 820); rr(x - 56, y - 38, 112, 76, 24); fill(PAL.white); ctx.beginPath(); ctx.moveTo(x - 20, y + 36); ctx.lineTo(x - 34, y + 58); ctx.lineTo(x + 4, y + 36); fill(PAL.white);
+  for (let i = 0; i < 3; i++) { circ(x - 24 + i * 24, y, 7); fill(PAL.coral); }
+  [x, y] = fl(3, 1740, 900); circ(x, y, 40); fill(PAL.teal); ctx.font = '900 34px Inter'; ctx.fillStyle = PAL.white; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('+1', x, y + 2);
+  ctx.restore();
+  // soft drop shadow under the phone
+  ctx.fillStyle = 'rgba(160,40,30,.22)'; rr(838, 336, 864, 514, 58); ctx.fill();
+  // phone body
+  rr(818, 303, 864, 514, 58); fill('#151827');
+  rr(826, 311, 848, 498, 52); fill('#22263a');
+}
+function overA(t) {
+  const ui = PZ.on ? 1 - E.inOutSine(inv(0.55, 0.92, PZ.prog)) : 1;     // screen UI melts away just before we pass through the screen
+  // bezel lip + camera + UI on the screen
+  ctx.lineWidth = 10; ctx.strokeStyle = '#151827'; rr(845, 330, 810, 460, 26); ctx.stroke();
+  circ(836, 560, 7); fill('#0c0e18');
+  ctx.save(); ctx.globalAlpha = ui;
+  ctx.fillStyle = 'rgba(255,255,255,.9)'; ctx.fillRect(890, 742, 720, 5); ctx.fillStyle = PAL.coral; ctx.fillRect(890, 742, 720 * ((t * 0.09) % 1), 5);
+  circ(890 + 720 * ((t * 0.09) % 1), 744, 9); fill(PAL.white);
+  rr(1530, 360, 100, 44, 22); fill('rgba(0,0,0,.35)'); heart(1556, 384, 14); fill(PAL.pink);
+  ctx.font = '800 22px Inter'; ctx.fillStyle = PAL.white; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillText(C.likes, 1574, 383);
+  // glare
+  ctx.save(); rr(850, 335, 800, 450, 22); ctx.clip();
+  ctx.fillStyle = 'rgba(255,255,255,.07)'; ctx.beginPath(); ctx.moveTo(1180, 335); ctx.lineTo(1330, 335); ctx.lineTo(1090, 785); ctx.lineTo(940, 785); ctx.closePath(); ctx.fill();
+  ctx.restore(); ctx.restore();
+  // thumb over the right bezel + palm + sleeve
+  ctx.fillStyle = PAL.skin2; ctx.beginPath(); ctx.moveTo(1960, 640); ctx.bezierCurveTo(1860, 640, 1760, 610, 1700, 560); ctx.bezierCurveTo(1660, 525, 1680, 470, 1730, 478); ctx.bezierCurveTo(1800, 490, 1880, 520, 1960, 520); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = PAL.skin; ctx.beginPath(); ctx.moveTo(1960, 625); ctx.bezierCurveTo(1860, 625, 1770, 598, 1712, 552); ctx.bezierCurveTo(1680, 525, 1694, 486, 1734, 492); ctx.bezierCurveTo(1800, 503, 1880, 532, 1960, 532); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#fbd2b8'; ctx.beginPath(); ctx.ellipse(1722, 522, 20, 26, -0.5, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(1560, 1100); ctx.bezierCurveTo(1560, 860, 1700, 760, 1840, 760); ctx.lineTo(1960, 760); ctx.lineTo(1960, 1100); ctx.closePath(); fill(PAL.skin2);
+  ctx.beginPath(); ctx.moveTo(1600, 1100); ctx.bezierCurveTo(1610, 900, 1720, 800, 1860, 800); ctx.lineTo(1960, 800); ctx.lineTo(1960, 1100); ctx.closePath(); fill(PAL.skin);
+  rr(1700, 960, 300, 160, 30); fill(PAL.navy); ctx.fillStyle = PAL.deep; ctx.fillRect(1700, 960, 300, 26);
+}
+
+/* ---------------- Level B: the city at dusk (portal = one lit window) ---------------- */
+const B = { portal: [1052, 612, 115, 64.7], r: 3 };
+const R1 = rngOf(11), FAR = [], MID = [];
+for (let x = -40; x < 1980;) { const w = 50 + R1() * 90; FAR.push([x, w, 230 + R1() * 260]); x += w + 4; }
+for (let x = -40; x < 1980;) { const w = 80 + R1() * 120; MID.push([x, w, 200 + R1() * 230, R1()]); x += w + 18; }
+function drawB(t) {
+  par(0.42, () => {
+  const bands = ['#7b5cd6', '#9c6ade', '#c77dff', '#ff8e8e', '#ffab84', '#ffc78a'];
+  bands.forEach((c, i) => { ctx.fillStyle = c; ctx.fillRect(-20, -20 + i * 120, 1960, 140 + (i === 5 ? 600 : 0)); });
+  circ(560, 600, 210); fill('rgba(255,227,160,.35)'); circ(560, 600, 160); fill(PAL.yellow);
+  // clouds
+  [[300, 230, 1], [1250, 160, 0.8], [1700, 300, 1.1]].forEach(([cx, cy, s], i) => {
+    const x = cx + t * 18 * (i + 1) % 2200 - (t * 18 * (i + 1) > 2200 ? 2200 : 0);
+    ctx.fillStyle = 'rgba(255,240,230,.85)'; rr(x - 120 * s, cy, 240 * s, 50 * s, 25 * s); ctx.fill(); circ(x - 30 * s, cy, 46 * s); ctx.fill(); circ(x + 40 * s, cy + 6 * s, 34 * s); ctx.fill();
+  });
+  // birds
+  ctx.strokeStyle = PAL.deep; ctx.lineWidth = 3.5; ctx.lineCap = 'round';
+  for (let i = 0; i < 5; i++) { const bx = (200 + i * 70 + t * 60) % 2100 - 100, by = 240 + i * 22 + Math.sin(t * 3 + i) * 8, f = Math.sin(t * 10 + i) * 8;
+    ctx.beginPath(); ctx.moveTo(bx - 14, by - f); ctx.quadraticCurveTo(bx - 6, by - 4, bx, by); ctx.quadraticCurveTo(bx + 6, by - 4, bx + 14, by - f); ctx.stroke(); }
+  });
+  par(0.28, () => {
+  // far skyline
+  FAR.forEach(([x, w, h], i) => { ctx.fillStyle = '#5b3fa8'; ctx.fillRect(x, 1080 - 330 - h * 0.6, w, h + 400);
+    for (let wy = 1080 - 300 - h * 0.6; wy < 900; wy += 26) for (let wx = x + 8; wx < x + w - 10; wx += 18) if (((wx * 7 + wy * 3 + i) % 11) < 2) { ctx.fillStyle = (Math.floor(t * 2 + wx) % 7) ? '#ffd98a' : '#7d63c4'; ctx.fillRect(wx, wy, 8, 12); } });
+  // train on a bridge
+  ctx.fillStyle = PAL.deep; ctx.fillRect(-20, 735, 1960, 16);
+  for (let px = -20; px < 1960; px += 120) ctx.fillRect(px, 751, 14, 90);
+  const tx = ((t * 260) % 2600) - 700;
+  for (let c = 0; c < 4; c++) { rr(tx + c * 150, 690, 140, 44, 10); fill(c ? '#ffd166' : '#ff9f43'); ctx.fillStyle = PAL.deep; for (let w = 0; w < 4; w++) ctx.fillRect(tx + c * 150 + 14 + w * 30, 700, 20, 14); }
+  });
+  par(0.12, () => {
+  // mid buildings
+  MID.forEach(([x, w, h, v], i) => {
+    const top = 1080 - 120 - h; ctx.fillStyle = v > 0.5 ? '#2b2d6e' : '#33357a'; ctx.fillRect(x, top, w, h + 200);
+    if (v > 0.7) { ctx.fillRect(x + w * 0.4, top - 40, 6, 40); circ(x + w * 0.4 + 3, top - 44, 6); fill('#ff6b6b'); }
+    for (let wy = top + 20; wy < 1060; wy += 34) for (let wx = x + 12; wx < x + w - 16; wx += 26) { const on = ((wx * 13 + wy * 7 + i * 5) % 9) < 4; ctx.fillStyle = on ? '#ffe08a' : '#24265f'; ctx.fillRect(wx, wy, 14, 20); }
+  });
+  });
+  // the near building with the portal window
+  ctx.fillStyle = '#1f2a5a'; ctx.fillRect(880, 430, 520, 700);
+  ctx.fillStyle = '#26336b'; ctx.fillRect(880, 430, 520, 18); ctx.fillRect(1380, 430, 20, 700);
+  for (let r = 0; r < 7; r++) for (let c = 0; c < 4; c++) {
+    const wx = 912 + c * 122, wy = 480 + r * 96;
+    if (Math.abs(wx - 1052) < 5 && Math.abs(wy - 612) < 50) continue;
+    const on = ((r * 5 + c * 3) % 4) === 0;
+    rr(wx, wy, 100, 60, 3); fill(on ? '#ffd98a' : '#18224a');
+    ctx.fillStyle = '#2f3d7a'; ctx.fillRect(wx - 6, wy + 60, 112, 8);
+  }
+  ctx.fillStyle = '#ffd98a'; ctx.fillRect(1052, 612, 115, 65);
+}
+function overB(t) {
+  const ui = PZ.on ? 1 - E.inOutSine(inv(0.6, 0.93, PZ.prog)) : 1;
+  ctx.save(); ctx.globalAlpha = ui;
+  // window frame, curtains, a plant on the sill
+  ctx.strokeStyle = '#2f3d7a'; ctx.lineWidth = 6; ctx.strokeRect(1049, 609, 121, 71);
+  ctx.fillStyle = '#ff8fab'; ctx.beginPath(); ctx.moveTo(1052, 612); ctx.lineTo(1074, 612); ctx.quadraticCurveTo(1064, 650, 1056, 677); ctx.lineTo(1052, 677); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(1167, 612); ctx.lineTo(1145, 612); ctx.quadraticCurveTo(1155, 650, 1163, 677); ctx.lineTo(1167, 677); ctx.closePath(); ctx.fill();
+  ctx.fillStyle = '#2f3d7a'; ctx.fillRect(1043, 677, 133, 9);
+  rr(1150, 664, 14, 14, 3); fill('#c0703a'); ctx.fillStyle = '#3ecf8e'; circ(1157, 659, 7); ctx.fill();
+  ctx.restore();
+  // foreground roofs
+  ctx.fillStyle = '#141b3d'; ctx.beginPath(); ctx.moveTo(-20, 1100); ctx.lineTo(-20, 960); ctx.lineTo(300, 960); ctx.lineTo(300, 900); ctx.lineTo(560, 900); ctx.lineTo(560, 1000); ctx.lineTo(760, 1000); ctx.lineTo(760, 1100); ctx.closePath(); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(1500, 1100); ctx.lineTo(1500, 940); ctx.lineTo(1760, 940); ctx.lineTo(1760, 880); ctx.lineTo(1960, 880); ctx.lineTo(1960, 1100); ctx.closePath(); ctx.fill();
+}
+
+/* ---------------- Level C: the room inside (portal = laptop screen) ---------------- */
+const Cc = { portal: [806.4, 420, 307.2, 172.8], r: 6 };
+function drawC(t) {
+  ctx.fillStyle = PAL.teal; ctx.fillRect(-20, -20, 1960, 820);
+  ctx.fillStyle = PAL.teal2; ctx.fillRect(-20, 620, 1960, 200);
+  ctx.fillStyle = '#c98b5e'; ctx.fillRect(-20, 800, 1960, 320); ctx.fillStyle = '#b97b4f'; for (let x = -20; x < 1960; x += 160) ctx.fillRect(x, 800, 6, 320);
+  // window with the dusk city
+  rr(110, 130, 380, 330, 12); fill('#f4e3c9');
+  ctx.save(); rr(130, 150, 340, 290, 6); ctx.clip();
+  ['#9c6ade', '#c77dff', '#ff8e8e', '#ffab84'].forEach((c, i) => { ctx.fillStyle = c; ctx.fillRect(130, 150 + i * 72, 340, 80); });
+  circ(260, 330, 50); fill(PAL.yellow);
+  for (let i = 0; i < 9; i++) { const h = 50 + ((i * 37) % 70); ctx.fillStyle = '#2b2d6e'; ctx.fillRect(130 + i * 40, 440 - h, 34, h); }
+  ctx.restore();
+  ctx.fillStyle = '#f4e3c9'; ctx.fillRect(296, 150, 8, 290); ctx.fillRect(130, 292, 340, 8);
+  // shelves + books + clock + frame
+  ctx.fillStyle = '#e9a46a'; ctx.fillRect(1240, 250, 460, 16); ctx.fillRect(1240, 420, 460, 16);
+  const books = ['#ff6b57', '#ffd166', '#6c5ce7', '#fff4e0', '#ff8fab', '#1d2a5c', '#ff9f43'];
+  for (let i = 0; i < 9; i++) { const h = 110 + ((i * 29) % 40); rr(1260 + i * 30 + (i > 5 ? 40 : 0), 250 - h, 24, h, 3); fill(books[i % 7]); }
+  rr(1520, 290, 140, 130, 8); fill(PAL.cream); circ(1590, 355, 40); fill(PAL.pink);
+  circ(760, 170, 70); fill(PAL.cream); circ(760, 170, 60); fill(PAL.white);
+  ctx.strokeStyle = PAL.navy; ctx.lineWidth = 6; ctx.lineCap = 'round';
+  const ha = t * 0.6, ma = t * 6;
+  ctx.beginPath(); ctx.moveTo(760, 170); ctx.lineTo(760 + Math.sin(ha) * 30, 170 - Math.cos(ha) * 30); ctx.moveTo(760, 170); ctx.lineTo(760 + Math.sin(ma) * 46, 170 - Math.cos(ma) * 46); ctx.stroke();
+  // desk
+  ctx.fillStyle = '#e9a46a'; rr(280, 640, 1360, 34, 10); ctx.fill();
+  ctx.fillStyle = '#b9774a'; ctx.fillRect(330, 674, 30, 300); ctx.fillRect(1560, 674, 30, 300);
+  // lamp + its light
+  ctx.fillStyle = 'rgba(255,230,160,.22)'; ctx.beginPath(); ctx.moveTo(1380, 420); ctx.lineTo(1220, 640); ctx.lineTo(1560, 640); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = PAL.navy; ctx.lineWidth = 12; ctx.beginPath(); ctx.moveTo(1460, 640); ctx.lineTo(1500, 500); ctx.lineTo(1400, 410); ctx.stroke();
+  ctx.fillStyle = PAL.yellow; ctx.beginPath(); ctx.moveTo(1340, 380); ctx.lineTo(1430, 350); ctx.lineTo(1450, 440); ctx.closePath(); ctx.fill();
+  rr(1420, 630, 90, 14, 6); fill(PAL.navy);
+  // plant
+  rr(420, 560, 90, 80, 12); fill('#e07a5f');
+  [[-60, -70, -0.6], [0, -110, 0], [60, -80, 0.6], [-30, -150, -0.3], [40, -150, 0.35]].forEach(([dx, dy, a], i) => {
+    ctx.save(); ctx.translate(465, 560); ctx.rotate(a + Math.sin(t * 1.4 + i) * 0.04); ctx.fillStyle = i % 2 ? '#2a9d8f' : '#3ecf8e';
+    ctx.beginPath(); ctx.ellipse(0, dy * 0.6, 30, 62, 0, 0, Math.PI * 2); ctx.fill(); ctx.restore(); });
+  // mug + steam
+  rr(1140, 580, 60, 60, 10); fill(PAL.cream); ctx.strokeStyle = PAL.cream; ctx.lineWidth = 9; ctx.beginPath(); ctx.arc(1205, 610, 16, -1.2, 1.2); ctx.stroke();
+  ctx.strokeStyle = 'rgba(255,255,255,.6)'; ctx.lineWidth = 5;
+  for (let s = 0; s < 3; s++) { ctx.beginPath(); for (let i = 0; i <= 20; i++) { const y = 570 - i * 5, x = 1155 + s * 15 + Math.sin(i * 0.5 - t * 4 + s) * 6; i ? ctx.lineTo(x, y) : ctx.moveTo(x, y); } ctx.stroke(); }
+  // sleeping cat at the desk edge
+  const br = 1 + 0.03 * Math.sin(t * 2.4);
+  ctx.save(); ctx.translate(560, 640); ctx.scale(1, br);
+  ctx.fillStyle = PAL.orange; ctx.beginPath(); ctx.ellipse(0, -36, 92, 40, 0, Math.PI, 0); ctx.fill(); ctx.fillRect(-92, -36, 184, 36);
+  circ(-70, -48, 34); fill(PAL.orange);
+  ctx.beginPath(); ctx.moveTo(-96, -66); ctx.lineTo(-88, -98); ctx.lineTo(-70, -78); ctx.fill(); ctx.beginPath(); ctx.moveTo(-60, -80); ctx.lineTo(-44, -100); ctx.lineTo(-40, -70); ctx.fill();
+  ctx.strokeStyle = PAL.deep; ctx.lineWidth = 4; ctx.beginPath(); ctx.arc(-80, -48, 8, 0.2, Math.PI - 0.2); ctx.stroke(); ctx.beginPath(); ctx.arc(-58, -48, 8, 0.2, Math.PI - 0.2); ctx.stroke();
+  ctx.strokeStyle = '#e8892f'; ctx.lineWidth = 10; ctx.beginPath(); ctx.moveTo(80, -10); ctx.quadraticCurveTo(140, -10, 120, -60); ctx.stroke();
+  ctx.restore();
+  // laptop
+  ctx.fillStyle = '#c9d2dd'; ctx.beginPath(); ctx.moveTo(760, 620); ctx.lineTo(1160, 620); ctx.lineTo(1200, 642); ctx.lineTo(720, 642); ctx.closePath(); ctx.fill();
+  rr(788, 404, 344, 214, 14); fill('#2a2f45');
+}
+function overC(t) {
+  ctx.strokeStyle = '#2a2f45'; ctx.lineWidth = 6; rr(803, 417, 313, 179, 8); ctx.stroke();
+  circ(960, 410, 3); fill('#111');
+}
+
+/* ---------------- Level D: the editor on the laptop (portal = preview) ---------------- */
+const D = { portal: [672, 118, 576, 324], r: 6 };
+function drawD(t) {
+  ctx.fillStyle = '#121729'; ctx.fillRect(-20, -20, 1960, 1120);
+  ctx.fillStyle = '#1a2038'; ctx.fillRect(0, 0, 1920, 64);
+  ['#ff5f57', '#febc2e', '#28c840'].forEach((c, i) => { circ(40 + i * 30, 32, 9); fill(c); });
+  ctx.font = '600 24px Inter'; ctx.fillStyle = 'rgba(255,255,255,.7)'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('XIAOXIONG  ·  Edit', 960, 33);
+  // media bin
+  ctx.fillStyle = '#1a2038'; rr(24, 90, 600, 470, 14); ctx.fill();
+  const th = [PAL.coral, PAL.teal, PAL.purple, PAL.yellow, PAL.pink, PAL.orange];
+  for (let i = 0; i < 6; i++) { const x = 50 + (i % 3) * 190, y = 120 + Math.floor(i / 3) * 210; rr(x, y, 170, 96, 8); fill(th[i]); rr(x, y + 110, 120, 12, 6); fill('#2c3456'); rr(x, y + 132, 80, 10, 5); fill('#2c3456'); }
+  // inspector
+  rr(1296, 90, 600, 470, 14); fill('#1a2038');
+  for (let i = 0; i < 6; i++) { const y = 140 + i * 66; rr(1330, y, 160, 12, 6); fill('#2c3456'); rr(1520, y, 340, 8, 4); fill('#2c3456'); const v = 0.3 + 0.5 * ((i * 0.37 + Math.sin(t * 0.8 + i) * 0.1) % 1); rr(1520, y, 340 * v, 8, 4); fill(th[i]); circ(1520 + 340 * v, y + 4, 12); fill(PAL.white); }
+  // preview area (portal) frame
+  rr(660, 106, 600, 348, 14); fill('#0b0e1a');
+  // transport
+  ctx.fillStyle = 'rgba(255,255,255,.75)'; ctx.beginPath(); ctx.moveTo(950, 484); ctx.lineTo(974, 498); ctx.lineTo(950, 512); ctx.closePath(); ctx.fill();
+  // timeline
+  rr(24, 584, 1872, 470, 14); fill('#161b30');
+  const cols = [PAL.coral, PAL.teal, PAL.yellow, PAL.purple];
+  for (let tr = 0; tr < 4; tr++) {
+    const y = 640 + tr * 96; ctx.fillStyle = '#1d2340'; ctx.fillRect(160, y, 1700, 72);
+    rr(40, y + 16, 90, 40, 8); fill('#262d4d');
+    let x = 170 + tr * 40;
+    for (let c = 0; x < 1840; c++) { const w = 160 + ((tr * 7 + c * 13) % 5) * 70; rr(x, y + 6, Math.min(w, 1850 - x), 60, 10); fill(cols[(tr + c) % 4]);
+      if (tr === 3) { ctx.fillStyle = 'rgba(20,27,61,.55)'; for (let k = x + 8; k < x + w - 8 && k < 1840; k += 8) { const a = 6 + 22 * Math.abs(Math.sin(k * 0.13) * Math.sin(k * 0.031)); ctx.fillRect(k, y + 36 - a, 4, a * 2); } }
+      x += w + 10; }
+  }
+  const ph = 300 + ((t * 120) % 1500);
+  ctx.fillStyle = PAL.white; ctx.fillRect(ph, 600, 4, 440); ctx.beginPath(); ctx.moveTo(ph - 12, 596); ctx.lineTo(ph + 16, 596); ctx.lineTo(ph + 2, 616); ctx.closePath(); ctx.fill();
+}
+function overD(t) {
+  ctx.strokeStyle = 'rgba(255,255,255,.18)'; ctx.lineWidth = 3; rr(672, 118, 576, 324, 6); ctx.stroke();
+  ctx.font = '600 20px "Latin Modern Mono", monospace'; ctx.fillStyle = 'rgba(255,255,255,.85)'; ctx.textAlign = 'left';
+  const s = Math.floor(t * 30); ctx.fillText(`00:00:${String(Math.floor(t)).padStart(2, '0')}:${String(s % 30).padStart(2, '0')}`, 1050, 472);
+}
+
+const LV = [
+  { draw: drawA, over: overA, P: A.portal, r: A.r },
+  { draw: drawB, over: overB, P: B.portal, r: B.r },
+  { draw: drawC, over: overC, P: Cc.portal, r: Cc.r },
+  { draw: drawD, over: overD, P: D.portal, r: D.r },
+];
+LV.forEach((l) => { l.s = l.P[2] / 1920; l.log = Math.log(1 / l.s); });
+const TOTAL = LV.reduce((a, l) => a + l.log, 0);
+
+function drawLevel(i, t, depth, screenScale) {
+  const L = LV[i % 4];
+  const keep = PZ.on; if (depth > 0) PZ.on = false;
+  L.draw(t);
+  const [px, py, pw, ph] = L.P;
+  if (depth < 3 && pw * screenScale > 3) {
+    ctx.save(); rr(px, py, pw, ph, L.r); ctx.clip();
+    ctx.translate(px, py); ctx.scale(L.s, L.s);
+    drawLevel(i + 1, t, depth + 1, screenScale * L.s);
+    ctx.restore();
+  }
+  L.over(t);
+  PZ.on = keep;
+}
+
+Reel.scene({
+  duration: 10, fps: 30,
+  fonts: ['900 120px "Noto Sans CJK SC"', '600 24px Inter', '800 22px Inter', '600 20px "Latin Modern Mono"'],
+  cues: [{ t: 0.5, sfx: 'whoosh_up' }, { t: 1.5, sfx: 'pop' }, { t: 3.1, sfx: 'pop' }, { t: 4.9, sfx: 'pop' }, { t: 6.4, sfx: 'pop' }, { t: 7.55, sfx: 'impact_soft' }, { t: 7.7, sfx: 'sparkle' }],
+  render(t) {
+    begin();
+    // global log-zoom: ease in, cruise, ease out exactly one full loop
+    // constant dive speed with short ease-in / ease-out so the journey never stalls
+    const t0 = 0.35, a = 0.65, d = 0.75, t1 = 7.55, c = t1 - t0 - a - d, v = TOTAL / (a / 2 + c + d / 2);
+    const u = clamp(t, t0, t1) - t0;
+    const g = u < a ? v * u * u / (2 * a) : u < a + c ? v * (a / 2 + (u - a)) : TOTAL - v * Math.pow(t1 - t0 - u, 2) / (2 * d);
+    let i = 0, f = g;
+    while (i < 3 && f > LV[i].log) { f -= LV[i].log; i++; }
+    if (i === 3 && f > LV[3].log) { f = LV[3].log; }
+    if (g >= TOTAL - 1e-6) { i = 0; f = 0; }
+    const L = LV[i];
+    const Z = Math.exp(f);
+    const Fx = L.P[0] / (1 - L.s), Fy = L.P[1] / (1 - L.s);
+    ctx.setTransform(K0 * Z, 0, 0, K0 * Z, K0 * Fx * (1 - Z), K0 * Fy * (1 - Z));
+    PZ = { on: true, Z, Fx, Fy, prog: f / L.log };
+    drawLevel(i, t, 0, Z);
+    PZ.on = false;
+    // title over level A at the end
+    const tk = E.outBack(clamp(inv(7.6, 8.15, t)), 1.6), ta = clamp(inv(7.6, 7.8, t));
+    if (ta > 0) {
+      begin();
+      ctx.save(); ctx.translate(430, 470); ctx.scale(tk, tk); ctx.globalAlpha = ta;
+      ctx.font = '900 120px "Noto Sans CJK SC"'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.fillStyle = PAL.deep; ctx.fillText(C.title, 6, 8); ctx.fillStyle = PAL.white; ctx.fillText(C.title, 0, 0);
+      ctx.font = '700 22px Inter'; ctx.fillStyle = PAL.white; ctx.letterSpacing = '6px'; ctx.fillText(C.sub, 0, 96); ctx.letterSpacing = '0px';
+      ctx.restore();
+    }
+  },
+});
+</script></body></html>

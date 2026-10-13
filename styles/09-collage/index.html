@@ -1,0 +1,603 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>09 拼贴剪贴 · Collage</title>
+<script src="../../lib/core.js"></script>
+<script src="../../lib/gl.js"></script>
+<script src="media/media.js"></script>
+</head><body><div id="stage"></div>
+<script>
+/* ===== 09 拼贴剪贴 · PAPER COLLAGE, SHOT AS STOP-MOTION =====
+   Every piece is built as a physical object: kraft board, torn magazine pages (white fibrous core where
+   the print layer split), riso + newsprint halftone prints, an instax print and ransom-note letters on
+   foam pads, a Dymo label with embossed letters, masking tape, a staple, paint-marker doodles and inked
+   rubber stamps. Each piece carries albedo + height/gloss/tooth maps; the lighting pass treats the table
+   as a height field under a soft window: area-light shadows with contact hardening, ambient occlusion,
+   paper tooth under raking light and glossy window reflections. 12 drawings per second; at the end the
+   window light slides to golden hour. */
+const { E, clamp, lerp, inv } = Reel;
+const stage = Reel.makeStage('#5a3e26');
+const C = Reel.cfg({ head: '今天也要好好创作', handle: '@肖雄XIAOXIONG' });
+const RS = Reel.RS, W = Math.round(1920 * RS), H = Math.round(1080 * RS), K = W / 1920;
+const DBG = +(Reel.Q.get('dbg') || 0);
+const R = Reel.rng(20261006);
+const rr = (a, b) => a + (b - a) * R();
+const n1 = Reel.noise1, n2 = Reel.noise2, hsh = Reel.hash;
+const SS = 0.86;                 // sprite px per design px
+const ZS = 255 / 16;             // props.R: 0..16 design px of height
+const LMAX = 130;                // lift map range (design px)
+const SANS = '"Noto Sans CJK SC"', SERIF = '"Noto Serif CJK SC"';
+const mkc = (w, h) => { const c = document.createElement('canvas'); c.width = Math.max(1, Math.ceil(w)); c.height = Math.max(1, Math.ceil(h)); return c; };
+const g2 = (c) => c.getContext('2d', { willReadFrequently: true });   // CPU-backed canvases (fast in software)
+const poly = (g, pts) => { g.beginPath(); pts.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y))); g.closePath(); };
+const prc = (z, gloss, tooth) => `rgb(${Math.round(z * ZS)},${Math.round(gloss * 255)},${Math.round(tooth * 255)})`;
+
+// ---------- buffers ----------
+const ALB = mkc(W, H), PRP = mkc(W, H), LFT = mkc(W, H);
+const ga = g2(ALB), gp = g2(PRP), gl2 = g2(LFT);
+for (const g of [ga, gp, gl2]) { g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high'; }
+const out = mkc(W, H); out.style.cssText = 'position:absolute;left:0;top:0;width:1920px;height:1080px'; stage.appendChild(out);
+const G = Reel.GL(out);
+const tA = G.texture(W, H), tP = G.texture(W, H), tL = G.texture(W, H);
+const HT = G.target(W, H, { float: true }), SH = G.target(W, H, { float: true });
+const HD = `#version 300 es
+precision highp float; in vec2 uv; out vec4 o;`;
+const pHeight = G.program(HD + `uniform sampler2D P, L; uniform float LMAX;
+void main(){ float r = texture(P,uv).r*16.; o = vec4(r + texture(L,uv).r*LMAX, r, 0., 1.); }`);
+const pShade = G.program(HD + `
+uniform sampler2D A, P, HT;
+uniform vec2 res; uniform float pxd, uK, elev, lr, dbg;
+uniform vec3 cam, Ldir, Lc, Ac;
+uniform float gob; uniform vec2 gobOff;
+float hash12(vec2 p){ vec3 p3=fract(vec3(p.xyx)*.1031); p3+=dot(p3,p3.yzx+33.33); return fract((p3.x+p3.y)*p3.z); }
+vec2 grad2(vec2 i){ float a = hash12(i)*6.2832; return vec2(cos(a), sin(a)); }
+float gnoise(vec2 p){ vec2 i=floor(p), f=fract(p); vec2 u=f*f*f*(f*(f*6.-15.)+10.);
+  return mix(mix(dot(grad2(i),f), dot(grad2(i+vec2(1,0)),f-vec2(1,0)),u.x), mix(dot(grad2(i+vec2(0,1)),f-vec2(0,1)), dot(grad2(i+vec2(1,1)),f-vec2(1,1)),u.x), u.y); }
+const mat2 RA = mat2(.8,.6,-.6,.8), RB = mat2(.28,-.96,.96,.28);
+float tooth(vec2 d){ return gnoise(d*.30)*.5 + gnoise(RA*d*.72+7.3)*.32 + gnoise(RB*d*1.6+3.1)*.18; }
+float Ht(vec2 q){ return texture(HT,q).r; }
+float fbmL(vec2 p){ float a=.5, s=0.; for(int i=0;i<5;i++){ s+=a*gnoise(p); p=RA*p*2.07+1.7; a*=.5; } return s; }
+// golden-hour light through a window plant: dappled leaf shadows + one mullion, elongated along the light
+float gobo(vec2 d, vec2 L2){
+  vec2 Ld = normalize(vec2(L2.x, -L2.y));
+  vec2 q = d + gobOff;
+  float u = dot(q, Ld), v = dot(q, vec2(-Ld.y, Ld.x));
+  float lf = fbmL(vec2(u*.0030, v*.0062) + vec2(3.1, 7.7)) + .10*gnoise(vec2(u, v)*.02);
+  float leaf = 1. - smoothstep(-.06, .06, lf + .02);
+  float reach = 1. - smoothstep(380., 980., q.x);
+  float mull = 1. - smoothstep(16., 44., abs(v + 70.)) * smoothstep(-200., 300., -q.x + 900.);
+  return 1. - gob * clamp(leaf*reach*.92 + (1.-mull)*.75, 0., .95);
+}
+float vis1(vec2 p, float hp, vec2 d){
+  float m = -1.5, s = .8;
+  for(int i=0;i<20;i++){
+    float dh = Ht(p + d*(s/res)) - hp;
+    m = max(m, dh*pxd/s);
+    s *= 1.29;
+  }
+  return smoothstep(-lr, lr, elev - atan(m));
+}
+void main(){
+  vec2 px = uv*res;
+  vec4 pr = texture(P, uv);
+  float hp = Ht(uv), hr = texture(HT,uv).g;
+  vec2 e = 1./res;
+  float hx = (texture(P,uv+vec2(e.x,0.)).r - texture(P,uv-vec2(e.x,0.)).r)*16.;
+  float hy = (texture(P,uv+vec2(0.,e.y)).r - texture(P,uv-vec2(0.,e.y)).r)*16.;
+  vec3 n = vec3(-hx*pxd*.5, -hy*pxd*.5, 1.);
+  vec2 dc = (vec2(px.x, res.y-px.y)/uK - cam.xy)/cam.z;          // design coords (y down)
+  float tth = pr.b;
+  if (tth > .004) {
+    float g0 = tooth(dc), gx = tooth(dc+vec2(.3,0.)), gy = tooth(dc+vec2(0.,.3));
+    vec2 gg = vec2(gx-g0, gy-g0)/.3;
+    n.xy += vec2(-gg.x, gg.y) * tth * 1.1;
+  }
+  n = normalize(n);
+  vec2 L2 = normalize(Ldir.xy);
+  float c1 = cos(.14), s1 = sin(.14);
+  vec2 La = vec2(c1*L2.x - s1*L2.y, s1*L2.x + c1*L2.y), Lb = vec2(c1*L2.x + s1*L2.y, -s1*L2.x + c1*L2.y);
+  float vis = (vis1(uv,hp,L2)*2. + vis1(uv,hp,La) + vis1(uv,hp,Lb))*.25;
+  float occ = 0.;
+  for(int i=0;i<8;i++){
+    float a = float(i)*.7854 + .4; vec2 dd = vec2(cos(a), sin(a));
+    occ += clamp((texture(HT,uv+dd*2.5/res).g-hr)*pxd/2.5*.55, 0., 1.);
+    occ += clamp((texture(HT,uv+dd*9./res).g-hr)*pxd/9.*.9, 0., 1.);
+  }
+  float ao = 1. - occ/16.*.9;
+  vec3 alb = pow(texture(A,uv).rgb, vec3(2.2));
+  float gls = pr.g;
+  bool metal = gls > .97;
+  vec2 dcC = (res*.5/uK - cam.xy)/cam.z;
+  vec3 V = normalize(vec3(dcC.x-dc.x, -(dcC.y-dc.y), 1900./cam.z));
+  vec3 Rf = reflect(-V, n);
+  float rough = mix(.55, .05, gls);
+  float wnd = smoothstep(cos(lr*1.6 + rough), cos(max(lr*1.6 - rough, 0.)), dot(Rf, Ldir));
+  float F = .04 + .96*pow(1. - max(dot(n, V), 0.), 5.);
+  float ndl = max(dot(n, Ldir), 0.);
+  float gb = gob > .001 ? gobo(dc, L2) : 1.;
+  float fall = 1. + .2*clamp(dot((uv-.5)*vec2(res.x/res.y,1.), L2)*1.5, -1., 1.);
+  vec3 col;
+  if (metal) {
+    col = alb*(Ac*(.35+.25*n.z)*ao + Lc*ndl*vis*.25) + alb*Lc*wnd*vis*1.6 + alb*Ac*.6*(.5+.5*Rf.z);
+  } else {
+    col = alb*(Lc*ndl*vis*fall*gb + Ac*(.5+.5*n.z)*ao);
+    col += Lc*wnd*F*gls*vis*gb*5.;
+    col += Ac*gls*.05*F;
+  }
+  if (dbg > .5) {
+    if (dbg < 1.5) col = alb; else if (dbg < 2.5) col = pr.rgb; else if (dbg < 3.5) col = vec3(hp/12.);
+    else if (dbg < 4.5) col = vec3(vis*ao); else col = n*.5+.5;
+  }
+  o = vec4(col, 1.);
+}`);
+const pPost = G.program(HD + `
+uniform sampler2D S; uniform vec2 res; uniform float expo, seed, ca, vig, warm, dbg;
+float hash12(vec2 p){ vec3 p3=fract(vec3(p.xyx)*.1031); p3+=dot(p3,p3.yzx+33.33); return fract((p3.x+p3.y)*p3.z); }
+vec3 aces(vec3 x){ return clamp((x*(2.51*x+.03))/(x*(2.43*x+.59)+.14), 0., 1.); }
+void main(){
+  vec2 d = uv - .5;
+  vec3 c = vec3(texture(S, uv - d*ca).r, texture(S, uv).g, texture(S, uv + d*ca).b);
+  float soft = smoothstep(.12, .5, dot(d,d)) * 1.6;
+  if (soft > .01) {
+    vec3 acc = c; for (int i=0;i<8;i++){ float a = float(i)*.785+.39; acc += texture(S, uv + vec2(cos(a),sin(a))*soft/res).rgb; }
+    c = acc/9.;
+  }
+  if (dbg > .5) { o = vec4(pow(clamp(c,0.,1.), vec3(1./2.2)), 1.); return; }
+  float r2 = dot(d*vec2(1.5,1.), d*vec2(1.5,1.));
+  c *= expo * (1. - vig*r2);
+  c = aces(c);
+  c = pow(c, vec3(1./2.2));
+  float l = dot(c, vec3(.3,.59,.11));
+  c += vec3(.016, .006, -.012) * smoothstep(.35, .95, l) * (1.+warm) + vec3(-.008, -.002, .012) * (1. - smoothstep(.0, .45, l));
+  c = mix(vec3(l), c, 1.04);
+  c += (hash12(uv*res + seed*91.7) - .5) * .02 + (hash12(floor(uv*res*.5) + seed*13.1) - .5) * .01;
+  o = vec4(c, 1.);
+}`);
+
+// ---------- paper helpers ----------
+function sprite(w, h, pad) { const c = mkc((w + pad * 2) * SS, (h + pad * 2) * SS); const g = g2(c); g.scale(SS, SS); g.translate(pad, pad); return [c, g]; }
+function paperTex(g, w, h, o = {}) {
+  const nm = o.mott ?? 16;
+  for (let i = 0; i < nm; i++) {
+    const x = R() * w, y = R() * h, r = (0.12 + R() * 0.4) * Math.max(w, h), dark = R() < 0.5;
+    const gr = g.createRadialGradient(x, y, 0, x, y, r); const a = (o.ma ?? 0.035) * (0.5 + R());
+    gr.addColorStop(0, dark ? `rgba(0,0,0,${a})` : `rgba(255,255,255,${a})`); gr.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = gr; g.fillRect(-10, -10, w + 20, h + 20);
+  }
+  const nf = o.fib ?? 150; g.lineCap = 'round';
+  for (let i = 0; i < nf; i++) {
+    const x = R() * w, y = R() * h, a = R() * 6.283, l = 2 + R() * (o.fl ?? 9);
+    g.lineWidth = (o.fw ?? 0.6) * (0.6 + R() * 0.8);
+    g.strokeStyle = o.fc ? o.fc[(R() * o.fc.length) | 0] : (R() < 0.5 ? 'rgba(0,0,0,.07)' : 'rgba(255,255,255,.12)');
+    g.beginPath(); g.moveTo(x, y); g.quadraticCurveTo(x + Math.cos(a) * l * 0.5 + rr(-2, 2), y + Math.sin(a) * l * 0.5 + rr(-2, 2), x + Math.cos(a) * l, y + Math.sin(a) * l); g.stroke();
+  }
+  const ns = o.speck ?? 12;
+  for (let i = 0; i < ns; i++) { g.fillStyle = o.sc || 'rgba(40,30,20,.35)'; g.beginPath(); g.arc(R() * w, R() * h, 0.3 + R() * (o.sr ?? 0.8), 0, 7); g.fill(); }
+}
+// rectangle outline with torn ('t') or scissor-cut ('c') sides [top,right,bottom,left]; inner = print boundary
+function outline(w, h, o = {}) {
+  const sides = o.sides || 'tttt', amp = o.amp ?? 6, seed = o.seed ?? 1, band = o.band ?? 7, cj = o.cj ?? 2.5;
+  const Cn = [[0, 0], [w, 0], [w, h], [0, h]].map(([x, y]) => [x + rr(-cj, cj), y + rr(-cj, cj)]);
+  const outer = [], inner = [], fib = [];
+  for (let s = 0; s < 4; s++) {
+    const [x0, y0] = Cn[s], [x1, y1] = Cn[(s + 1) % 4];
+    const L = Math.hypot(x1 - x0, y1 - y0), tx = (x1 - x0) / L, ty = (y1 - y0) / L, nx = ty, ny = -tx;
+    if (sides[s] === 'c') {
+      outer.push([x0, y0]); inner.push([x0, y0]);
+      const kinks = L > 220 ? 2 : 1;
+      for (let k = 1; k <= kinks; k++) { const u = k / (kinks + 1) + rr(-0.06, 0.06), off = rr(-0.9, 0.9); const p = [x0 + tx * L * u + nx * off, y0 + ty * L * u + ny * off]; outer.push(p); inner.push(p); }
+    } else {
+      const N = Math.max(4, Math.round(L / 2.2));
+      for (let i = 0; i < N; i++) {
+        const u = i / N, taper = Math.pow(Math.sin(Math.PI * u), 0.3);
+        const d = amp * taper * (n1(seed * 13.1 + s * 7.3 + u * L / 50) * 0.75 + n1(seed * 5.7 + s * 3.1 + u * L / 10) * 0.28) + rr(-0.5, 0.5) * amp * 0.16;
+        const bx = x0 + tx * L * u + nx * d, by = y0 + ty * L * u + ny * d;
+        outer.push([bx, by]);
+        const bw = band > 0 ? clamp(n1(seed * 3.3 + s * 11 + u * L / 34) * band * 0.95 + band * 0.42, 0, band) * taper : 0;
+        inner.push([bx - nx * bw, by - ny * bw]);
+        if (R() < 0.55) fib.push([bx, by, nx, ny]);
+      }
+    }
+  }
+  return { outer, inner, fib };
+}
+function fibers(g, fib, col = 'rgba(250,248,240,.6)') {
+  g.strokeStyle = col; g.lineCap = 'round';
+  for (const [x, y, nx, ny] of fib) {
+    const l = 0.8 + R() * 3.2, a = Math.atan2(ny, nx) + rr(-0.9, 0.9);
+    g.lineWidth = 0.35 + R() * 0.5;
+    g.beginPath(); g.moveTo(x - nx * 0.8, y - ny * 0.8); g.quadraticCurveTo(x + Math.cos(a) * l * 0.6 + rr(-0.6, 0.6), y + Math.sin(a) * l * 0.6 + rr(-0.6, 0.6), x + Math.cos(a) * l, y + Math.sin(a) * l); g.stroke();
+  }
+}
+/* make a piece: o = { w, h, pad, ol (outline), paint(g,w,h) inside outer, core (white core colour), z, gloss, tooth,
+   relief(gp) extra props (drawn with 'lighter'), fib colour } -> sprites alb/prp/msk */
+function makePiece(o) {
+  const pad = o.pad ?? 16, { w, h } = o, ol = o.ol;
+  const [A, a] = sprite(w, h, pad), [P, p] = sprite(w, h, pad), [M, m] = sprite(w, h, pad);
+  a.save(); poly(a, ol.outer); a.clip();
+  if (o.core) { a.fillStyle = o.core; a.fillRect(-pad, -pad, w + pad * 2, h + pad * 2); paperTex(a, w, h, { mott: 4, fib: 60, fl: 5, fc: ['rgba(0,0,0,.05)', 'rgba(255,255,255,.3)'] }); a.save(); poly(a, ol.inner); a.clip(); o.paint(a, w, h); a.restore(); }
+  else o.paint(a, w, h);
+  a.restore();
+  if (ol.fib.length) fibers(a, ol.fib, o.fibCol);
+  if (o.over) o.over(a, w, h);
+  p.fillStyle = prc(o.z, o.gloss ?? 0.1, o.tooth ?? 0.3); poly(p, ol.outer); p.fill();
+  if (o.innerGloss !== undefined) { p.save(); poly(p, ol.inner); p.clip(); p.fillStyle = prc(o.z, o.innerGloss, o.innerTooth ?? 0.08); p.fillRect(-pad, -pad, w + pad * 2, h + pad * 2); p.restore(); }
+  if (o.cockle) { const [amt, n, r0, r1] = o.cockle; p.save(); poly(p, ol.outer); p.clip(); p.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < n; i++) { const x = R() * w, y = R() * h, r = rr(r0, r1), gr = p.createRadialGradient(x, y, 0, x, y, r); gr.addColorStop(0, `rgb(${Math.round(amt * ZS * rr(0.4, 1))},0,0)`); gr.addColorStop(1, 'rgb(0,0,0)'); p.fillStyle = gr; p.fillRect(x - r, y - r, r * 2, r * 2); }
+    p.restore(); }
+  if ((o.edge ?? 0.3) > 0) { p.save(); poly(p, ol.outer); p.clip(); p.globalCompositeOperation = 'lighter'; p.filter = `blur(${(2.2 * SS).toFixed(2)}px)`; p.lineWidth = 5; p.lineJoin = 'round'; p.strokeStyle = `rgb(${Math.round((o.edge ?? 0.3) * ZS)},0,0)`; poly(p, ol.outer); p.stroke(); p.restore(); }
+  if (o.relief) { p.save(); poly(p, ol.outer); p.clip(); p.globalCompositeOperation = 'lighter'; o.relief(p, w, h); p.restore(); }
+  m.fillStyle = '#fff'; poly(m, ol.outer); m.fill();
+  return { alb: A, prp: P, msk: M, w, h, pad };
+}
+// corner curl relief: lifts one corner of a sheet by up to `amt` px
+const curl = (cx, cy, r, amt) => (p) => { const gr = p.createRadialGradient(cx, cy, 0, cx, cy, r); gr.addColorStop(0, `rgb(${Math.round(amt * ZS)},10,0)`); gr.addColorStop(0.45, `rgb(${Math.round(amt * ZS * 0.32)},4,0)`); gr.addColorStop(1, 'rgb(0,0,0)'); p.fillStyle = gr; p.fillRect(cx - r, cy - r, r * 2, r * 2); };
+
+// ---------- prints ----------
+const IMG = {};
+async function loadImgs() {
+  await Promise.all(['pixel', 'city', 'glass', 'cottage'].map((n) => new Promise((res) => { const im = new Image(); im.onload = res; im.onerror = res; im.src = window.MEDIA[n]; IMG[n] = im; })));
+}
+function imgData(img, cw, ch, sx = 0, sy = 0, sw = img.width, sh = img.height) {
+  const t = mkc(cw, ch), g = g2(t); g.drawImage(img, sx, sy, sw, sh, 0, 0, cw, ch); return g.getImageData(0, 0, cw, ch).data;
+}
+// halftone into rect (x,y,w,h): mode 'mono' (black on newsprint) or 'riso' (pink + blue, misregistered)
+function halftone(g, img, x, y, w, h, mode) {
+  const cw = 150, ch = Math.round(150 * h / w), d = imgData(img, cw, ch);
+  const step = mode === 'riso' ? 6.4 : 4.4;
+  const inks = mode === 'riso' ? [['rgba(255,72,130,.9)', 0.26, 0, [-1.1, 0.6]], ['rgba(36,78,206,.88)', 1.31, 1, [0.9, -0.5]]] : [['rgba(22,20,18,.95)', 0.785, 2, [0, 0]]];
+  g.save(); g.beginPath(); g.rect(x, y, w, h); g.clip();
+  for (const [ink, ang, ch_, off] of inks) {
+    g.fillStyle = ink; if (mode === 'riso') g.globalCompositeOperation = 'multiply';
+    const ca = Math.cos(ang), sa = Math.sin(ang), R2 = Math.hypot(w, h);
+    for (let v = -R2; v < R2; v += step) for (let u = -R2; u < R2; u += step) {
+      const px = w / 2 + u * ca - v * sa, py = h / 2 + u * sa + v * ca;
+      if (px < -3 || py < -3 || px > w + 3 || py > h + 3) continue;
+      const ix = clamp(Math.floor(px / w * cw), 0, cw - 1), iy = clamp(Math.floor(py / h * ch), 0, ch - 1), i = (iy * cw + ix) * 4;
+      const L = (d[i] * 0.3 + d[i + 1] * 0.59 + d[i + 2] * 0.11) / 255;
+      let k;
+      if (mode === 'riso') { k = ch_ === 0 ? (1 - d[i + 1] / 255) * 0.55 + (1 - L) * 0.55 : (1 - d[i] / 255) * 0.5 + (1 - L) * 0.6; k = clamp((k - 0.32) * 1.7); }
+      else k = clamp(Math.pow(clamp((1 - L) * 1.25 - 0.12), 1.05));
+      const r = step * 0.6 * Math.sqrt(k) * (0.92 + 0.16 * hsh(u * 3.1 + v * 7.7));
+      if (r > 0.22) { g.beginPath(); g.arc(x + px + off[0], y + py + off[1], r, 0, 7); g.fill(); }
+    }
+    g.globalCompositeOperation = 'source-over';
+  }
+  g.restore();
+}
+const POOL = '的一是在不了有和人这中大为上个国我以要他时来用们生到作地于出就分对成会可主发年动同工也能下过子说产种面而方后多定行学法所民得经十三之进着等部度家电力里如水化高自二理起小物现实加量都两体制机当使点从业本去把性好应开它合还因由其些然前外天政四日那社义事平形相全表间样与关各重新线内数正心反你明看原又么利比或但质气第向道命此变条只没结解问意建月公无系很情者最立代想已通并提直题程展五果料象员位入常文总次品式活设及管特件长求老头基资边流路级少图山统接知较将组见计别她手角期根论运农指几九区强放决西被干做必战先回则任取据处府';
+const rtxt = (n) => { let s = ''; for (let i = 0; i < n; i++) s += POOL[(R() * POOL.length) | 0]; return s; };
+function textBlock(g, x, y, w, h, size, lh, col, font = SERIF, wt = 400) {
+  g.fillStyle = col; g.font = `${wt} ${size}px ${font}`; g.textBaseline = 'top'; g.textAlign = 'left';
+  const per = Math.floor(w / size);
+  for (let yy = y; yy < y + h - size; yy += lh) { const n = R() < 0.12 ? Math.floor(per * rr(0.3, 0.8)) : per; g.fillText(rtxt(n), x, yy); }
+}
+
+// ---------- the board ----------
+let BOARD;
+function buildBoard() {
+  const BW = 2040, BH = 1180, OX = -60, OY = -50, s = 0.72;
+  const c = mkc(BW * s, BH * s), g = g2(c); g.scale(s, s);
+  g.fillStyle = '#ad7845'; g.fillRect(0, 0, BW, BH);
+  paperTex(g, BW, BH, { mott: 80, ma: 0.05, fib: 16000, fl: 13, fw: 0.9, fc: ['rgba(70,42,20,.24)', 'rgba(92,58,30,.2)', 'rgba(205,165,115,.2)', 'rgba(60,35,15,.13)', 'rgba(230,200,150,.12)'], speck: 700, sc: 'rgba(48,28,12,.5)', sr: 1.0 });
+  for (let i = 0; i < 40; i++) { g.fillStyle = ['rgba(40,60,140,.4)', 'rgba(150,40,30,.35)', 'rgba(250,240,220,.5)'][i % 3]; g.beginPath(); g.arc(R() * BW, R() * BH, 0.5 + R(), 0, 7); g.fill(); }
+  BOARD = { c, x: OX, y: OY, w: BW, h: BH };
+}
+
+// ---------- pieces ----------
+const PIECES = [];
+// t0 = arrival, from = [dx,dy] start offset, frot = extra rotation, lift = start height, conf = conformal props (tape)
+function add(pc, x, y, rot, t0, o = {}) { PIECES.push(Object.assign({ pc, x, y, rot, t0, from: [0, -260], frot: 0.12, lift: 110, dur: 0.42 }, o)); }
+
+function buildPieces() {
+  // --- loose offcuts already lying on the board ---
+  const offs = [[60, 520, '#ffc21f', 0.6], [1880, 470, '#2447cf', -0.4], [990, 1050, '#f6f3ea', 0.2], [1120, 40, '#e6dfcc', -1.1], [80, 610, '#2447cf', 1.9], [1860, 1010, '#ef4b3a', 0.9]];
+  offs.forEach(([x, y, col, r], i) => {
+    const w = rr(40, 90), h = rr(9, 22);
+    const ol = { outer: [[0, h * rr(0, 0.4)], [w, 0], [w * rr(0.6, 0.95), h], [rr(0, 8), h * rr(0.7, 1)]], inner: [], fib: [] }; ol.inner = ol.outer;
+    add(makePiece({ w, h, pad: 6, ol, paint: (g) => { g.fillStyle = col; g.fillRect(-5, -5, w + 10, h + 10); paperTex(g, w, h, { mott: 2, fib: 20, fl: 4 }); }, z: 0.3, gloss: 0.04, tooth: 0.5, edge: 0.2 }), x, y, r, -1);
+  });
+
+  // --- newspaper page (torn) ---
+  { const w = 640, h = 480, ol = outline(w, h, { sides: 'tttt', amp: 9, seed: 3, band: 3 });
+    add(makePiece({ w, h, pad: 20, ol, core: '#efe9d8', fibCol: 'rgba(240,235,220,.5)', z: 0.3, gloss: 0.04, tooth: 0.32, edge: 0.25, cockle: [0.5, 14, 60, 160],
+      paint: (g) => {
+        g.fillStyle = '#e4dcc7'; g.fillRect(-10, -10, w + 20, h + 20);
+        paperTex(g, w, h, { mott: 10, ma: 0.05, fib: 260, fl: 7, fc: ['rgba(120,100,70,.08)', 'rgba(255,255,255,.18)'] });
+        g.fillStyle = '#1d1b18'; g.font = `900 58px ${SERIF}`; g.textBaseline = 'alphabetic'; g.fillText('创作者的时代', 30, 82);
+        g.fillRect(30, 98, w - 60, 3); g.fillRect(30, 104, w - 60, 1);
+        g.font = `500 15px ${SANS}`; g.fillStyle = '#3a3630'; g.fillText('本报讯 · 一个人，一台电脑，就是一支队伍', 30, 128);
+        const cw = 140;
+        for (let k = 0; k < 4; k++) textBlock(g, 30 + k * (cw + 14), 148, cw, h - 150, 12, 17, 'rgba(28,26,22,.86)');
+        g.fillStyle = '#e4dcc7'; g.fillRect(338, 160, 280, 190);
+        halftone(g, IMG.city, 344, 166, 268, 151, 'mono');
+        g.font = `400 11px ${SANS}`; g.fillStyle = '#3a3630'; g.fillText('▲ 十秒钟，长出一座城', 344, 324);
+        g.fillStyle = 'rgba(120,90,40,.10)'; g.fillRect(-10, -10, w + 20, h + 20);
+      } }), 1450, 330, 0.05, 0.2, { from: [380, -160], frot: 0.1 });
+  }
+
+  // --- big yellow circle, scissor-cut construction paper ---
+  { const r = 300, w = r * 2, h = r * 2, pts = [];
+    let kink = 0;
+    for (let i = 0; i < 96; i++) { const a = i / 96 * Math.PI * 2; if (i % 9 === 0) kink = rr(-1.4, 1.4); pts.push([r + Math.cos(a) * (r + kink + rr(-0.3, 0.3)), r + Math.sin(a) * (r + kink + rr(-0.3, 0.3))]); }
+    const ol = { outer: pts, inner: pts, fib: [] };
+    add(makePiece({ w, h, pad: 12, ol, z: 0.8, gloss: 0.03, tooth: 0.62, edge: 0.45, cockle: [0.7, 22, 50, 150],
+      paint: (g) => { g.fillStyle = '#ffbf1f'; g.fillRect(-10, -10, w + 20, h + 20); paperTex(g, w, h, { mott: 26, ma: 0.05, fib: 900, fl: 8, fc: ['rgba(255,236,150,.35)', 'rgba(205,130,0,.18)', 'rgba(255,255,255,.2)'], speck: 25, sc: 'rgba(160,90,0,.35)' }); } }),
+      990, 470, 0.0, 0.45, { from: [60, -420], frot: 0.0 });
+  }
+
+  // --- four prints ---
+  { // TL: glossy magazine page, game screenshot, torn top/left
+    const w = 450, h = 330, ol = outline(w, h, { sides: 'tcct', amp: 7, seed: 5, band: 8 });
+    add(makePiece({ w, h, pad: 18, ol, core: '#f7f5ef', z: 1.1, gloss: 0.3, tooth: 0.12, innerGloss: 0.62, edge: 0.4, relief: curl(w, 0, 150, 1.8),
+      paint: (g) => {
+        g.fillStyle = '#f4f2ec'; g.fillRect(-10, -10, w + 20, h + 20);
+        g.drawImage(IMG.pixel, 0, 0, 640, 360, 0, 0, w, 253);
+        g.fillStyle = '#e8352a'; g.fillRect(16, 266, 46, 18); g.fillStyle = '#fff'; g.font = '700 12px Inter'; g.textBaseline = 'middle'; g.fillText('GAME', 22, 276);
+        g.fillStyle = '#16140f'; g.font = `900 24px ${SANS}`; g.textBaseline = 'alphabetic'; g.fillText('像素冒险：推门通关', 70, 285);
+        textBlock(g, 16, 296, w - 30, 40, 10, 14, 'rgba(60,58,55,.8)', SANS, 400);
+      } }), 330, 245, -0.075, 0.75, { from: [-420, 60], frot: -0.14 });
+  }
+  { // TR: riso print, scissor cut
+    const w = 400, h = 296, ol = outline(w, h, { sides: 'cccc', cj: 2.5 });
+    add(makePiece({ w, h, pad: 14, ol, z: 1.25, gloss: 0.06, tooth: 0.4, edge: 0.4, relief: curl(w, h, 120, 1.5),
+      paint: (g) => {
+        g.fillStyle = '#f2ead8'; g.fillRect(-10, -10, w + 20, h + 20); paperTex(g, w, h, { mott: 8, fib: 160, fl: 6 });
+        halftone(g, IMG.glass, 20, 20, 360, 203, 'riso');
+        g.globalCompositeOperation = 'multiply';
+        g.fillStyle = 'rgba(36,78,206,.9)'; g.font = '800 22px Inter'; g.textBaseline = 'alphabetic'; g.fillText('LIQUID GLASS', 20, 254);
+        g.fillStyle = 'rgba(255,72,130,.9)'; g.font = `700 15px ${SANS}`; g.fillText('液态玻璃 · RISO PRINT 2026', 21, 278);
+        g.fillStyle = 'rgba(255,72,130,.85)'; g.beginPath(); g.arc(352, 260, 18, 0, 7); g.fill();
+        g.globalCompositeOperation = 'source-over';
+      } }), 1610, 240, 0.06, 1.0, { from: [420, -40], frot: 0.16 });
+  }
+  { // BL: newsprint halftone photo, torn all round
+    const w = 440, h = 320, ol = outline(w, h, { sides: 'tttt', amp: 8, seed: 9, band: 3 });
+    add(makePiece({ w, h, pad: 20, ol, core: '#ece6d4', fibCol: 'rgba(236,230,214,.55)', z: 0.6, gloss: 0.04, tooth: 0.36, edge: 0.3, cockle: [0.45, 10, 40, 120], relief: curl(0, h, 130, 1.5),
+      paint: (g) => {
+        g.fillStyle = '#e5ddc8'; g.fillRect(-10, -10, w + 20, h + 20); paperTex(g, w, h, { mott: 8, fib: 180, fl: 6, fc: ['rgba(120,100,70,.08)', 'rgba(255,255,255,.18)'] });
+        halftone(g, IMG.city, 14, 14, w - 28, 232, 'mono');
+        g.fillStyle = '#1d1b18'; g.font = `700 17px ${SANS}`; g.textBaseline = 'alphabetic'; g.fillText('一座城，十秒长出来', 14, 270);
+        textBlock(g, 14, 278, w - 28, 44, 11, 15, 'rgba(28,26,22,.8)');
+      } }), 330, 840, 0.05, 1.25, { from: [-360, 300], frot: 0.12 });
+  }
+  { // BR: instax wide print on foam pads
+    const w = 430, h = 344, ol = outline(w, h, { sides: 'cccc', cj: 0.4 });
+    ol.outer = roundRect(w, h, 7); ol.inner = ol.outer;
+    add(makePiece({ w, h, pad: 16, ol, z: 5.5, gloss: 0.32, tooth: 0.06,
+      paint: (g) => {
+        const gr = g.createLinearGradient(0, 0, w, h); gr.addColorStop(0, '#fbfaf6'); gr.addColorStop(1, '#efede6'); g.fillStyle = gr; g.fillRect(-5, -5, w + 10, h + 10);
+        g.drawImage(IMG.cottage, 34, 0, 572, 360, 18, 21, w - 36, 248);
+        g.fillStyle = 'rgba(0,0,0,.18)'; g.fillRect(18, 21, w - 36, 1.2);
+        g.fillStyle = 'rgba(30,30,34,.88)'; g.font = '400 36px "TeX Gyre Chorus"'; g.textBaseline = 'alphabetic'; g.fillText('little house · Xiaoxiong', 40, 318);
+      },
+      relief: (p) => { p.fillStyle = 'rgb(0,120,0)'; p.fillRect(18, 21, w - 36, 248); } }), 1590, 832, -0.085, 1.5, { from: [380, 330], frot: -0.16 });
+  }
+
+  // --- cobalt strip, torn along both long edges ---
+  { const w = 1300, h = 132, ol = outline(w, h, { sides: 'tctc', amp: 7, seed: 21, band: 7, cj: 3 });
+    add(makePiece({ w, h, pad: 16, ol, core: '#9fb0ee', fibCol: 'rgba(170,185,240,.55)', z: 1.05, gloss: 0.03, tooth: 0.55, edge: 0.4, cockle: [0.5, 26, 30, 90],
+      paint: (g) => { g.fillStyle = '#2346cc'; g.fillRect(-10, -10, w + 20, h + 20); paperTex(g, w, h, { mott: 30, ma: 0.06, fib: 900, fl: 8, fc: ['rgba(120,150,255,.25)', 'rgba(10,20,90,.22)', 'rgba(255,255,255,.08)'], speck: 20, sc: 'rgba(10,20,80,.4)' }); } }),
+      980, 530, -0.018, 1.8, { from: [-900, 40], frot: -0.05, lift: 90 });
+  }
+
+  // --- ransom-note headline: each character on its own magazine chip, on foam ---
+  const CH = [...C.head];
+  const SPEC = [
+    { bg: '#161412', fg: '#ffc21f', font: SANS, wt: 900, s: 104, w: 126, h: 136, sides: 'cccc', z: 4.2, gloss: 0.5 },
+    { bg: '#ebe4d0', fg: '#d42a1e', font: SERIF, wt: 900, s: 112, w: 132, h: 142, sides: 'tctc', z: 5.6, gloss: 0.06, news: true },
+    { bg: '#ff5a8c', fg: '#ffffff', font: SANS, wt: 900, s: 94, w: 118, h: 122, sides: 'cccc', z: 3.4, gloss: 0.12, slant: 1 },
+    { bg: '#f8f6f0', fg: '#161412', font: SERIF, wt: 900, s: 118, w: 136, h: 146, sides: 'tttt', z: 6.2, gloss: 0.55 },
+    { bg: '#ffd23a', fg: '#161412', font: SANS, wt: 700, s: 100, w: 122, h: 130, sides: 'cccc', z: 4.0, gloss: 0.45 },
+    { bg: '#ef4b3a', fg: '#fff3dc', font: SERIF, wt: 700, s: 108, w: 126, h: 136, sides: 'ctcc', z: 5.0, gloss: 0.5 },
+    { bg: '#f3ecdc', fg: '#2346cc', font: SANS, wt: 900, s: 116, w: 134, h: 142, sides: 'tttt', z: 4.6, gloss: 0.1, dots: true },
+    { bg: '#161412', fg: '#ffffff', font: SERIF, wt: 900, s: 122, w: 140, h: 150, sides: 'cccc', z: 6.0, gloss: 0.55, rule: true },
+  ];
+  const XS = [500, 632, 782, 914, 1062, 1192, 1342, 1482];
+  CH.forEach((ch, i) => {
+    const sp = SPEC[i % SPEC.length], { w, h } = sp;
+    const ol = outline(w, h, { sides: sp.sides, amp: 4, seed: 40 + i, band: 5, cj: sp.slant ? 9 : 4 });
+    const pc = makePiece({ w, h, pad: 12, ol, core: '#f7f5ef', z: sp.z, gloss: sp.gloss, tooth: sp.news ? 0.3 : 0.1, edge: 0.3,
+      paint: (g) => {
+        g.fillStyle = sp.bg; g.fillRect(-10, -10, w + 20, h + 20);
+        if (sp.news) { paperTex(g, w, h, { mott: 4, fib: 60, fl: 5 }); textBlock(g, 4, 4, w, h, 9, 12, 'rgba(40,36,30,.35)'); }
+        if (sp.dots) { g.fillStyle = 'rgba(255,72,130,.55)'; for (let y = 3; y < h; y += 6) for (let x = (y / 6 % 2) * 3 + 2; x < w; x += 6) { g.beginPath(); g.arc(x, y, 1.5, 0, 7); g.fill(); } }
+        if (i === 3) { g.fillStyle = 'rgba(22,20,18,.85)'; g.font = '700 13px Inter'; g.textBaseline = 'top'; g.fillText('ISSUE No.', 8, 4); }
+        g.fillStyle = sp.fg; g.font = `${sp.wt} ${sp.s}px ${sp.font}`; g.textAlign = 'center'; g.textBaseline = 'middle';
+        g.fillText(ch, w / 2, h / 2 + sp.s * 0.05);
+        if (sp.rule) { g.fillStyle = '#e8352a'; g.fillRect(10, h - 14, w - 20, 5); }
+        if (sp.gloss > 0.3) { const gr = g.createLinearGradient(0, 0, w, h); gr.addColorStop(0, 'rgba(255,255,255,.06)'); gr.addColorStop(1, 'rgba(0,0,0,.05)'); g.fillStyle = gr; g.fillRect(0, 0, w, h); }
+        g.textAlign = 'left';
+      } });
+    add(pc, XS[i], 530 + (hsh(i * 5.1) - 0.5) * 30, (hsh(i * 9.3) - 0.5) * 0.22, 2.15 + i * 0.21, { from: [140, -170], frot: 0.18, lift: 75, dur: 0.38 });
+  });
+
+  // --- Dymo label, embossed letters ---
+  { const w = 560, h = 38, ol = { outer: roundRect(w, h, 6), inner: [], fib: [] }; ol.inner = ol.outer;
+    const txt = 'CUT · PASTE · CREATE', xs = [];
+    const lay = (g) => { g.font = '700 24px "TeX Gyre Heros Cn"'; let x = 26; for (const c of txt) { xs.push(x); x += g.measureText(c).width + 4.2; } };
+    add(makePiece({ w, h, pad: 10, ol, z: 1.5, gloss: 0.82, tooth: 0.0,
+      paint: (g) => {
+        const gr = g.createLinearGradient(0, 0, 0, h); gr.addColorStop(0, '#d8352d'); gr.addColorStop(0.5, '#c42820'); gr.addColorStop(1, '#a51d17'); g.fillStyle = gr; g.fillRect(0, 0, w, h);
+        lay(g); g.textBaseline = 'middle';
+        [...txt].forEach((c, k) => { g.fillStyle = `rgba(255,236,232,${0.8 + hsh(k) * 0.18})`; g.fillText(c, xs[k], h / 2 + 1 + (hsh(k * 3.3) - 0.5) * 1.6); });
+      },
+      relief: (p) => { p.filter = `blur(${0.9 * SS}px)`; p.font = '700 24px "TeX Gyre Heros Cn"'; p.textBaseline = 'middle'; p.fillStyle = `rgb(${Math.round(0.8 * ZS)},40,0)`; [...txt].forEach((c, k) => p.fillText(c, xs[k], h / 2 + 1 + (hsh(k * 3.3) - 0.5) * 1.6)); p.filter = 'none'; } }),
+      800, 702, -0.035, 4.1, { from: [520, 60], frot: 0.1, lift: 90 });
+  }
+
+  // --- masking tape ---
+  const TAPES = [[148, 102, -0.78, 150, 4.4], [1790, 112, 0.72, 140, 4.55], [330, 684, 0.04, 170, 4.7], [1425, 384, -0.62, 130, 4.85]];
+  TAPES.forEach(([x, y, r, len, t0], i) => {
+    const w = len, h = 44, pts = [];
+    for (let k = 0; k <= 8; k++) pts.push([k / 8 * w, rr(-0.6, 0.6)]);
+    for (let k = 0; k <= 7; k++) pts.push([w + (k % 2 ? rr(2, 5) : rr(-3, 0)), k / 7 * h]);
+    for (let k = 8; k >= 0; k--) pts.push([k / 8 * w, h + rr(-0.6, 0.6)]);
+    for (let k = 7; k >= 0; k--) pts.push([(k % 2 ? rr(-5, -2) : rr(0, 3)), k / 7 * h]);
+    const ol = { outer: pts, inner: pts, fib: [] };
+    add(makePiece({ w, h, pad: 8, ol, z: 0.28, gloss: 0.16, tooth: 0.1,
+      paint: (g) => {
+        g.fillStyle = 'rgba(238,226,192,.74)'; g.fillRect(-6, -6, w + 12, h + 12);
+        for (let k = 0; k < 70; k++) { g.fillStyle = R() < 0.5 ? 'rgba(160,140,100,.08)' : 'rgba(255,255,255,.12)'; g.fillRect(rr(0, w), rr(0, h), rr(8, 40), rr(0.4, 1.1)); }
+        g.fillStyle = 'rgba(255,255,255,.07)'; g.fillRect(0, h * 0.22, w, h * 0.16);
+      },
+      relief: (p) => { p.fillStyle = 'rgb(0,0,0)'; } }), x, y, r, t0, { from: [rr(-120, 120), -200], frot: 0.3, lift: 70, conf: true, dur: 0.33 });
+  });
+
+  // --- typed slip + staple ---
+  { const w = 480, h = 92, ol = outline(w, h, { sides: 'cccc', cj: 2 });
+    add(makePiece({ w, h, pad: 10, ol, z: 1.0, gloss: 0.05, tooth: 0.3, edge: 0.35,
+      paint: (g) => {
+        g.fillStyle = '#f5f2e8'; g.fillRect(-5, -5, w + 10, h + 10); paperTex(g, w, h, { mott: 4, fib: 90, fl: 5 });
+        g.strokeStyle = 'rgba(200,60,50,.35)'; g.lineWidth = 1; g.beginPath(); g.moveTo(0, 30); g.lineTo(w, 30); g.stroke();
+        const typ = (s, x, y, size) => { let k = 0; for (const ch of s) { const cj = /[\u4e00-\u9fff]/.test(ch); g.font = cj ? `500 ${size - 2}px ${SERIF}` : `400 ${size}px "Courier 10 Pitch"`; g.fillStyle = `rgba(24,22,26,${0.7 + hsh(k * 1.7 + y) * 0.28})`; g.textBaseline = 'alphabetic'; g.fillText(ch, x + (hsh(k * 5.3) - 0.5) * 0.6, y + (hsh(k * 3.1 + y) - 0.5) * 1.3); x += g.measureText(ch).width + (cj ? 1 : 0); k++; } };
+        typ('No.09 · 拼贴剪贴 · CUT & PASTE', 58, 24, 18);
+        typ(C.handle, 58, 72, 30);
+      } }), 990, 905, 0.02, 5.05, { from: [0, 300], frot: -0.08 });
+    const sw = 34, sh = 6, sol = { outer: roundRect(sw, sh, 2.6), inner: [], fib: [] }; sol.inner = sol.outer;
+    add(makePiece({ w: sw, h: sh, pad: 4, ol: sol, z: 2.0, gloss: 1.0, tooth: 0, edge: 0,
+      paint: (g) => { const gr = g.createLinearGradient(0, 0, 0, sh); gr.addColorStop(0, '#f2f4f7'); gr.addColorStop(0.5, '#b8bdc5'); gr.addColorStop(1, '#7d838c'); g.fillStyle = gr; g.fillRect(0, 0, sw, sh); g.fillStyle = 'rgba(40,40,45,.6)'; g.fillRect(0, 0, 2.5, sh); g.fillRect(sw - 2.5, 0, 2.5, sh); },
+      relief: (p) => { p.filter = `blur(${1.2 * SS}px)`; p.fillStyle = `rgb(${Math.round(0.6 * ZS)},0,0)`; p.fillRect(4, 1.5, sw - 8, sh - 3); p.filter = 'none'; } }),
+      776, 904, 1.38, 5.32, { from: [0, -40], frot: 0, lift: 30, dur: 0.17 });
+  }
+}
+function roundRect(w, h, r) { const pts = []; const q = 6; const cs = [[w - r, r, -Math.PI / 2], [w - r, h - r, 0], [r, h - r, Math.PI / 2], [r, r, Math.PI]]; for (const [cx, cy, a0] of cs) for (let k = 0; k <= q; k++) { const a = a0 + k / q * Math.PI / 2; pts.push([cx + Math.cos(a) * r, cy + Math.sin(a) * r]); } return pts; }
+
+// ---------- stamps ----------
+function inkTexture(c, seed, wear = 0.35) {
+  const g = g2(c), id = g.getImageData(0, 0, c.width, c.height), d = id.data, w = c.width;
+  for (let i = 0; i < d.length; i += 4) {
+    if (!d[i + 3]) continue;
+    const x = (i / 4) % w, y = Math.floor(i / 4 / w);
+    let k = 0.62 + 0.42 * n2(x * 0.22 + seed, y * 0.22) + 0.22 * n2(x * 0.9 + seed * 2, y * 0.9) - wear * Math.max(0, n2(x * 0.06 + seed, y * 0.06 + 5));
+    if (hsh(x * 13.7 + y * 7.1 + seed) < 0.04) k *= 0.35;
+    d[i + 3] = d[i + 3] * clamp(k);
+  }
+  g.putImageData(id, 0, 0);
+}
+let SEAL, DATE;
+const wetOf = (c) => { const k = mkc(c.width, c.height), g = g2(k); g.drawImage(c, 0, 0); g.globalCompositeOperation = 'source-in'; g.fillStyle = 'rgb(0,255,0)'; g.fillRect(0, 0, k.width, k.height); return k; };
+function buildStamps() {
+  { const w = 80, h = 128, s = SS * 1.25, c = mkc(w * s, h * s), g = c.getContext('2d'); g.scale(s, s);
+    g.fillStyle = '#c3141c'; g.beginPath(); g.roundRect(3, 3, w - 6, h - 6, 5); g.fill();
+    g.globalCompositeOperation = 'destination-out';
+    g.font = `900 58px ${SERIF}`; g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.save(); g.translate(w / 2, 34); g.scale(1, 1.02); g.fillText('肖', 0, 2); g.restore();
+    g.save(); g.translate(w / 2, 94); g.fillText('雄', 0, 2); g.restore();
+    g.lineWidth = 2.2; g.strokeStyle = '#000'; g.beginPath(); g.roundRect(8, 8, w - 16, h - 16, 3); g.stroke();
+    g.globalCompositeOperation = 'source-over';
+    inkTexture(c, 3.1, 0.45);
+    SEAL = { c, w, h, wet: wetOf(c) };
+  }
+  { const w = 300, h = 86, s = SS * 1.25, c = mkc(w * s, h * s), g = c.getContext('2d'); g.scale(s, s);
+    g.strokeStyle = '#2e3aa6'; g.fillStyle = '#2e3aa6'; g.lineWidth = 3.4; g.beginPath(); g.roundRect(4, 4, w - 8, h - 8, 12); g.stroke();
+    g.lineWidth = 1.2; g.beginPath(); g.roundRect(10, 10, w - 20, h - 20, 8); g.stroke();
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.font = '700 12px Inter'; if ('letterSpacing' in g) g.letterSpacing = '3px'; g.fillText('XIAOXIONG  STUDIO', w / 2, 24); if ('letterSpacing' in g) g.letterSpacing = '0px';
+    g.font = '700 34px "Courier 10 Pitch"'; g.fillText('2026·10·06', w / 2, 56);
+    inkTexture(c, 7.7, 0.3);
+    DATE = { c, w, h, wet: wetOf(c) };
+  }
+}
+
+// ---------- paint-marker doodles (white Posca) ----------
+const DOODLES = [];
+function buildDoodles() {
+  { const pts = [], cx = 1428, cy = 532, a0 = 2.75;
+    for (let k = 0; k <= 90; k++) { const u = k / 90, a = a0 + u * (Math.PI * 2 + 0.55); const r = 1 + 0.05 * Math.sin(a * 1.4 + 1) + 0.06 * u; pts.push([cx + Math.cos(a) * 166 * r + u * 10, cy + Math.sin(a) * 110 * r - u * 6]); }
+    DOODLES.push({ pts, t0: 5.5, d: 0.42 }); }
+  for (let k = 0; k < 3; k++) { const a = -2.2 + k * 0.42, r0 = 92, r1 = 132, cx = 500, cy = 530; DOODLES.push({ pts: [[cx + Math.cos(a) * r0, cy + Math.sin(a) * r0], [cx + Math.cos(a) * r1, cy + Math.sin(a) * r1]], t0: 5.98 + k * 0.05, d: 0.08 }); }
+  { const pts = [], cx = 1180, cy = 418, s = 26; for (let k = 0; k <= 5; k++) { const a = -Math.PI / 2 + k * 4 * Math.PI / 5; pts.push([cx + Math.cos(a) * s, cy + Math.sin(a) * s]); }
+    DOODLES.push({ pts, t0: 6.16, d: 0.16 }); }
+  { const pts = []; for (let k = 0; k <= 40; k++) { const u = k / 40; pts.push([1000 + u * 250, 618 + Math.sin(u * Math.PI * 5) * 6 + u * 2]); } DOODLES.push({ pts, t0: 6.3, d: 0.22 }); }
+}
+function drawDoodles(t) {
+  for (const dd of DOODLES) {
+    const pr = clamp((t - dd.t0) / dd.d); if (pr <= 0) continue;
+    const n = Math.max(2, Math.ceil(dd.pts.length * pr));
+    const path = (g) => { g.beginPath(); for (let k = 0; k < n; k++) { const [x, y] = dd.pts[k]; k ? g.lineTo(x, y) : g.moveTo(x, y); } };
+    ga.save(); ga.lineCap = 'round'; ga.lineJoin = 'round';
+    path(ga); ga.strokeStyle = 'rgba(250,249,244,.9)'; ga.lineWidth = 7.5; ga.stroke();
+    path(ga); ga.strokeStyle = 'rgba(255,255,255,.55)'; ga.lineWidth = 4.2; ga.stroke();
+    ga.restore();
+    gp.save(); gp.globalCompositeOperation = 'lighter'; gp.lineCap = 'round'; gp.lineJoin = 'round'; gp.filter = `blur(${(1.4 * K * camZ).toFixed(2)}px)`;
+    path(gp); gp.strokeStyle = `rgb(${Math.round(0.35 * ZS)},90,0)`; gp.lineWidth = 6.5; gp.stroke();
+    gp.restore();
+  }
+}
+
+// ---------- timeline helpers ----------
+let camZ = 1;
+function pose(P, t) {
+  if (P.t0 < 0) return { x: P.x, y: P.y, rot: P.rot, lift: 0 };
+  const u = t - P.t0; if (u < -1e-6) return null;
+  const p = clamp(u / P.dur);
+  const mv = E.outCubic(clamp(p / 0.6)), ld = clamp((p - 0.25) / 0.75);
+  return { x: P.x + P.from[0] * (1 - mv), y: P.y + P.from[1] * (1 - mv), rot: P.rot + P.frot * (1 - mv), lift: P.lift * (1 - E.inOutSine(ld)) };
+}
+function light(t) {
+  const k = E.inOutSine(clamp((t - 7.1) / 2.5));
+  const az = lerp(-2.30, -2.84, k), el = lerp(0.64, 0.38, k);                  // canvas angle of the window (y down)
+  const dx = Math.cos(az), dy = Math.sin(az);
+  const ce = Math.cos(el);
+  const L = [dx * ce, -dy * ce, Math.sin(el)];
+  const Lc = [lerp(2.55, 3.3, k), lerp(2.42, 2.55, k), lerp(2.25, 1.55, k)];
+  const Ac = [lerp(0.36, 0.3, k), lerp(0.4, 0.33, k), lerp(0.5, 0.46, k)];
+  return { L, el, Lc, Ac, k };
+}
+
+Reel.scene({
+  duration: 10, fps: 30,
+  frameKey: (t) => Math.floor(t * 12 + 1e-6),
+  fonts: [`900 100px ${SANS}`, `700 100px ${SANS}`, `500 100px ${SANS}`, `400 100px ${SANS}`, `900 100px ${SERIF}`, `700 100px ${SERIF}`, `500 100px ${SERIF}`, `400 100px ${SERIF}`, '700 24px "TeX Gyre Heros Cn"', '400 36px "TeX Gyre Chorus"', '400 20px "Courier 10 Pitch"', '700 20px "Courier 10 Pitch"', '700 12px Inter', '800 22px Inter'],
+  async setup() { await loadImgs(); buildBoard(); buildPieces(); buildStamps(); buildDoodles(); },
+  cues: [{ t: 0.2, sfx: 'paper', gain: 0.5 }, { t: 0.5, sfx: 'paper', gain: 0.45 }, { t: 0.55, sfx: 'slap', gain: 0.5 }, { t: 0.75, sfx: 'paper', gain: 0.4 }, { t: 0.82, sfx: 'slap', gain: 0.55 }, { t: 1.0, sfx: 'paper', gain: 0.4 }, { t: 1.05, sfx: 'slap', gain: 0.55 }, { t: 1.25, sfx: 'paper', gain: 0.4 }, { t: 1.3, sfx: 'slap', gain: 0.55 }, { t: 1.5, sfx: 'paper', gain: 0.4 }, { t: 1.55, sfx: 'slap', gain: 0.55 }, { t: 1.8, sfx: 'slap', gain: 0.55 }, { t: 1.8, sfx: 'tape', gain: 0.4 }, { t: 2.39, sfx: 'slap', gain: 0.5 }, { t: 2.6, sfx: 'slap', gain: 0.62 }, { t: 2.81, sfx: 'slap', gain: 0.5 }, { t: 3.02, sfx: 'slap', gain: 0.62 }, { t: 3.23, sfx: 'slap', gain: 0.5 }, { t: 3.44, sfx: 'slap', gain: 0.62 }, { t: 3.65, sfx: 'slap', gain: 0.5 }, { t: 3.86, sfx: 'slap', gain: 0.62 }, { t: 4.1, sfx: 'paper', gain: 0.45 }, { t: 4.4, sfx: 'tape', gain: 0.45 }, { t: 4.55, sfx: 'tape', gain: 0.45 }, { t: 4.7, sfx: 'tape', gain: 0.45 }, { t: 4.85, sfx: 'tape', gain: 0.45 }, { t: 5.05, sfx: 'paper', gain: 0.45 }, { t: 5.42, sfx: 'click', gain: 0.6 }, { t: 5.5, sfx: 'marker', gain: 0.5 }, { t: 6.0, sfx: 'marker', gain: 0.35 }, { t: 6.3, sfx: 'marker', gain: 0.4 }, { t: 6.65, sfx: 'stamp', gain: 0.75 }, { t: 7.0, sfx: 'stamp', gain: 0.6 }, { t: 7.3, sfx: 'swell', gain: 0.3 }],
+  render(tRaw) {
+    const f12 = Math.floor(tRaw * 12 + 1e-6), t = f12 / 12;
+    // camera: slow push at 12 fps, with a hair of jitter (stop-motion)
+    camZ = 1 + 0.085 * E.inOutSine(clamp(t / 10));
+    const cx = lerp(960, 990, E.inOutSine(clamp(t / 10))), cy = lerp(540, 556, E.inOutSine(clamp(t / 10)));
+    const jx = (hsh(f12 * 1.37) - 0.5) * 0.9, jy = (hsh(f12 * 2.71) - 0.5) * 0.9;
+    const ox = 960 - camZ * cx + jx, oy = 540 - camZ * cy + jy;
+    for (const g of [ga, gp, gl2]) g.setTransform(K * camZ, 0, 0, K * camZ, ox * K, oy * K);
+    // board
+    ga.drawImage(BOARD.c, BOARD.x, BOARD.y, BOARD.w, BOARD.h);
+    gp.fillStyle = prc(0, 0.05, 0.55); gp.fillRect(-200, -200, 2400, 1500);
+    gl2.save(); gl2.setTransform(1, 0, 0, 1, 0, 0); gl2.fillStyle = '#000'; gl2.fillRect(0, 0, W, H); gl2.restore();
+    // pieces in placement order
+    for (const P of PIECES) {
+      const st = pose(P, t); if (!st) continue;
+      const { x, y, rot, lift } = st, s = 1 + lift / 1900, b = lift * 0.03 * K * camZ;
+      const { alb, prp, msk, w, h, pad } = P.pc;
+      const put = (g, spr, op, alpha = 1) => {
+        g.save(); g.translate(x, y); g.rotate(rot); g.scale(s, s);
+        if (op) g.globalCompositeOperation = op; g.globalAlpha = alpha;
+        if (b > 0.35) g.filter = `blur(${b.toFixed(2)}px)`;
+        g.drawImage(spr, -(w / 2 + pad), -(h / 2 + pad), w + pad * 2, h + pad * 2);
+        g.restore();
+      };
+      put(ga, alb);
+      put(gp, prp, P.conf ? 'lighter' : null);
+      if (lift > 0.5) put(gl2, msk, 'lighten', clamp(lift / LMAX));
+    }
+    drawDoodles(t);
+    // rubber stamps (ink multiplies into whatever is under it); wet ink glints for a moment
+    const stampAt = (S, t0, x, y, r, sc = 1) => {
+      if (t < t0) return;
+      ga.save(); ga.translate(x, y); ga.rotate(r); ga.scale(sc, sc); ga.globalCompositeOperation = 'multiply'; ga.globalAlpha = 1; ga.drawImage(S.c, -S.w / 2, -S.h / 2, S.w, S.h); ga.restore();
+      const wet = 1 - clamp((t - t0) / 1.6);
+      if (wet > 0) { gp.save(); gp.translate(x, y); gp.rotate(r); gp.scale(sc, sc); gp.globalCompositeOperation = 'lighter'; gp.globalAlpha = wet * 0.55; gp.drawImage(S.wet, -S.w / 2, -S.h / 2, S.w, S.h); gp.restore(); }
+    };
+    stampAt(SEAL, 6.67, 1168, 902, -0.07, 0.86);
+    stampAt(DATE, 7.0, 1318, 212, 0.06);
+    // ---- GL ----
+    G.upload(tA, ALB); G.upload(tP, PRP); G.upload(tL, LFT);
+    pHeight.use().set('P', { tex: tP.tex, unit: 0 }).set('L', { tex: tL.tex, unit: 1 }).set('LMAX', LMAX).draw(HT);
+    const Lt = light(t);
+    pShade.use().set('A', { tex: tA.tex, unit: 0 }).set('P', { tex: tP.tex, unit: 1 }).set('HT', { tex: HT.tex, unit: 2 })
+      .set('res', [W, H]).set('pxd', K * camZ).set('uK', K).set('cam', [ox, oy, camZ]).set('Ldir', Lt.L).set('elev', Lt.el).set('lr', 0.15)
+      .set('Lc', Lt.Lc).set('Ac', Lt.Ac).set('gob', Lt.k).set('gobOff', [-(1 - Lt.k) * 520 + Math.sin(f12 * 0.9) * 5, Math.cos(f12 * 0.7) * 4]).set('dbg', DBG).draw(SH);
+    const flick = 1 + (hsh(f12 * 4.13) - 0.5) * 0.035;
+    pPost.use().set('S', { tex: SH.tex, unit: 0 }).set('res', [W, H]).set('expo', (0.7 + 0.08 * Lt.k) * flick).set('seed', f12 % 97).set('ca', 0.0016).set('vig', 0.42)
+      .set('warm', Lt.k).set('dbg', DBG).draw(null);
+  },
+});
+</script></body></html>

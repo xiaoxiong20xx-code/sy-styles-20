@@ -1,0 +1,555 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>13 像素风 · Pixel Art</title>
+<script src="../../lib/core.js"></script>
+</head><body><div id="stage"></div>
+<script>
+/* ===== 13 像素风 · PIXEL ART =====
+   A twilight forest level at 304x171, every pixel placed by code, scaled exactly x4.
+   Indexed colour: 11 hand-tuned ramps, Bayer-dithered sky, parallax layers (mountains, pines, a
+   colour-cycled waterfall, giant trees, playfield, foreground ferns), a little red-hooded hero with a
+   lantern whose light is dithered onto the world, fireflies, a gem, and a shrine door that opens. */
+const { E, clamp, inv, lerp } = Reel;
+const stage = Reel.makeStage('#0b0a1a');
+const C = Reel.cfg({ clear: 'STAGE CLEAR', sub: '关卡完成' });
+const RS = Reel.RS;
+const W = Math.round(1920 * RS), H = Math.round(1080 * RS);
+const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+cv.style.cssText = 'position:absolute;left:0;top:0;width:1920px;height:1080px;image-rendering:pixelated';
+stage.appendChild(cv);
+const ctx = cv.getContext('2d');
+const PW = 304, PH = 171;
+const small = document.createElement('canvas'); small.width = PW; small.height = PH;
+const sctx = small.getContext('2d');
+const img = sctx.createImageData(PW, PH);
+
+/* ---------------- palette: ramps dark -> light ---------------- */
+const RAMPS = [
+  ['#07061a', '#0e0d2c', '#171745', '#22245e', '#2f3478', '#414a92'],            // 0 night
+  ['#1d1430', '#33204a', '#4f2b62', '#74397a', '#a2508a', '#cf7397'],            // 1 dusk purple
+  ['#4a1f2e', '#86353a', '#c4583f', '#ee8a4f', '#ffbd6b', '#ffe3a3'],            // 2 ember / horizon
+  ['#08201c', '#0f3328', '#174c34', '#22693d', '#3a8f45', '#68b64b', '#a6dc62'], // 3 leaf
+  ['#08222e', '#0f3b4c', '#17596a', '#24838e', '#3bb0ad', '#78dbc9', '#c8f6e8'], // 4 water / glass
+  ['#1a0f0c', '#2e1a13', '#48291b', '#6a3f26', '#925d36', '#bf8a52'],            // 5 wood / dirt
+  ['#14131f', '#24253a', '#393b54', '#575b73', '#80859b', '#b4b8c8'],            // 6 stone
+  ['#2c0b18', '#5a1426', '#8f1f33', '#c9353e', '#ee5f53', '#ff9a83'],            // 7 hood red
+  ['#6e4434', '#a8705a', '#d9a283', '#f6d2b2'],                                  // 8 skin
+  ['#3a2a06', '#7d5c0d', '#c39318', '#f2c94c', '#fff09a', '#fffbe0'],            // 9 gold / light
+  ['#ffffff'],                                                                    // 10 white
+];
+const PAL = new Uint32Array(11 * 8);
+RAMPS.forEach((rp, r) => rp.forEach((h, l) => {
+  const v = parseInt(h.slice(1), 16);
+  PAL[r * 8 + l] = 0xff000000 | ((v & 255) << 16) | (v & 0xff00) | (v >> 16);   // ABGR little endian
+}));
+const RL = RAMPS.map((r) => r.length);
+const P = (r, l) => r * 8 + Math.max(0, Math.min(RL[r] - 1, l | 0));
+const buf = new Uint8Array(PW * PH);         // palette index
+const dep = new Uint8Array(PW * PH);         // layer id (0 sky .. 6 fg) for lighting
+const B4 = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
+const bay = (x, y) => (B4[(y & 3) * 4 + (x & 3)] + 0.5) / 16;
+const h1 = (n) => { const s = Math.sin(n * 127.1 + 311.7) * 43758.5453; return s - Math.floor(s); };
+const h2 = (x, y) => h1(x * 57.13 + y * 113.7);
+const n1 = (x) => { const i = Math.floor(x), f = x - i, u = f * f * (3 - 2 * f); return lerp(h1(i), h1(i + 1), u); };
+function put(x, y, c, d) { x |= 0; y |= 0; if (x < 0 || y < 0 || x >= PW || y >= PH) return; const i = y * PW + x; buf[i] = c; dep[i] = d; }
+function bump(x, y, k, minD) { x |= 0; y |= 0; if (x < 0 || y < 0 || x >= PW || y >= PH) return; const i = y * PW + x; if (dep[i] < minD) return; const c = buf[i], r = c >> 3; buf[i] = P(r, (c & 7) + k); }
+
+/* ---------------- 5x7 pixel font ---------------- */
+const FONT = {
+  S: ['01111', '10000', '10000', '01110', '00001', '00001', '11110'], T: ['11111', '00100', '00100', '00100', '00100', '00100', '00100'],
+  A: ['01110', '10001', '10001', '11111', '10001', '10001', '10001'], G: ['01111', '10000', '10000', '10111', '10001', '10001', '01111'],
+  E: ['11111', '10000', '10000', '11110', '10000', '10000', '11111'], C: ['01111', '10000', '10000', '10000', '10000', '10000', '01111'],
+  L: ['10000', '10000', '10000', '10000', '10000', '10000', '11111'], R: ['11110', '10001', '10001', '11110', '10100', '10010', '10001'],
+  '!': ['00100', '00100', '00100', '00100', '00100', '00000', '00100'], ' ': ['00000', '00000', '00000', '00000', '00000', '00000', '00000'],
+  x: ['00000', '00000', '10001', '01010', '00100', '01010', '10001'], '+': ['00000', '00100', '00100', '11111', '00100', '00100', '00000'],
+  0: ['01110', '10001', '10011', '10101', '11001', '10001', '01110'], 1: ['00100', '01100', '00100', '00100', '00100', '00100', '01110'],
+  2: ['01110', '10001', '00001', '00010', '00100', '01000', '11111'], 3: ['11110', '00001', '00001', '01110', '00001', '00001', '11110'],
+};
+function text(s, x, y, col, sc = 1, outline = P(0, 0)) {
+  const chars = [...s];
+  const draw = (ox, oy, c) => chars.forEach((ch, k) => { const g = FONT[ch] || FONT[' ']; for (let j = 0; j < 7; j++) for (let i = 0; i < 5; i++) if (g[j][i] === '1') for (let a = 0; a < sc; a++) for (let b = 0; b < sc; b++) put(x + ox + (k * 6 + i) * sc + a, y + oy + j * sc + b, c, 9); });
+  for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1], [1, 1], [2, 2]]) draw(dx, dy, outline);
+  draw(0, 0, col);
+}
+
+/* ---------------- world ---------------- */
+const WW = 900;
+const GAP = [262, 298], BRIDGE = [520, 650], STEP = [706, 790];
+function groundTop(x) {
+  if (x >= GAP[0] && x < GAP[1]) return 999;
+  if (x >= BRIDGE[0] && x < BRIDGE[1]) return 999;
+  if (x >= STEP[0]) return 131;
+  return 135;
+}
+// sky
+const SKY = [[0, 0, 1], [26, 0, 2], [48, 0, 3], [66, 1, 2], [82, 1, 3], [95, 2, 2], [106, 2, 3], [116, 2, 4], [171, 2, 4]];
+function drawSky(t) {
+  for (let y = 0; y < PH; y++) {
+    let k = 0; while (k < SKY.length - 2 && y >= SKY[k + 1][0]) k++;
+    const a = SKY[k], b = SKY[k + 1], f = (y - a[0]) / (b[0] - a[0]);
+    for (let x = 0; x < PW; x++) { const c = bay(x, y) < f ? P(b[1], b[2]) : P(a[1], a[2]); const i = y * PW + x; buf[i] = c; dep[i] = 0; }
+  }
+  // moon + halo
+  const mx = 238, my = 26;
+  for (let y = -16; y <= 16; y++) for (let x = -16; x <= 16; x++) {
+    const d = Math.hypot(x, y);
+    if (d <= 8.6) { const crater = (Math.hypot(x + 3, y - 2) < 2.2 || Math.hypot(x - 2, y + 3) < 1.6 || Math.hypot(x - 4, y - 3) < 1.2); put(mx + x, my + y, crater ? P(9, 4) : (x + y < -5 ? P(10, 0) : P(9, 5)), 0); }
+    else if (d < 14 && bay(mx + x, my + y) < (14 - d) / 6) bump(mx + x, my + y, 1, 0);
+  }
+  // stars
+  for (let i = 0; i < 110; i++) {
+    const x = Math.floor(h1(i * 3.7) * PW), y = Math.floor(Math.pow(h1(i * 9.1), 1.6) * 78);
+    if (Math.hypot(x - mx, y - my) < 15) continue;
+    const tw = (h1(i * 5.3) + t * (0.6 + h1(i) * 1.4)) % 1;
+    if (tw > 0.88) continue;
+    const big = h1(i * 2.9) > 0.9;
+    const c = h1(i * 7.7) > 0.5 ? P(10, 0) : P(4, 6);
+    put(x, y, c, 0);
+    if (big && tw < 0.5) { put(x - 1, y, P(4, 5), 0); put(x + 1, y, P(4, 5), 0); put(x, y - 1, P(4, 5), 0); put(x, y + 1, P(4, 5), 0); }
+  }
+}
+// far mountains (parallax .12)
+const PEAKS = [[30, 48], [95, 40], [150, 58], [210, 44], [262, 62], [330, 42], [392, 55], [450, 40]];
+function drawMountains(cx) {
+  const off = cx * 0.12;
+  for (let x = 0; x < PW; x++) {
+    const wx = x + off;
+    let h = 0, side = 0, snow = 0;
+    for (const [px, ph] of PEAKS) { const v = ph - Math.abs(wx - px) * 0.82 + (n1(wx * 0.3 + px) - 0.5) * 3; if (v > h) { h = v; side = wx > px ? 1 : -1; snow = ph > 50 ? v - (ph - 9) : -1; } }
+    const top = Math.round(118 - h);
+    for (let y = Math.max(0, top); y < PH; y++) {
+      let c = P(1, 1);
+      if (side < 0 && y - top < 3 + (n1(wx * 0.5) * 3 | 0)) c = P(1, 2);           // moonlit faces (moon is upper right... light rakes the left slopes)
+      if (snow > 0 && y - top < snow * 0.9 && bay(x, y) < 0.9 - (y - top) / (snow + 1) * 0.5) c = side < 0 ? P(6, 5) : P(6, 4);
+      if (y > 112) c = bay(x, y) < (y - 112) / 8 ? P(1, 0) : c;
+      put(x, y, c, 1);
+    }
+  }
+}
+// hills with pines (parallax .3)
+function drawHills(cx) {
+  const off = cx * 0.3;
+  for (let x = 0; x < PW; x++) {
+    const wx = x + off;
+    const top = Math.round(112 - 7 * Math.sin(wx * 0.021) - 4 * Math.sin(wx * 0.053 + 1));
+    for (let y = top; y < PH; y++) put(x, y, y - top < 1 ? P(0, 3) : P(0, 2), 2);
+  }
+  // pines
+  for (let k = Math.floor(off / 9) - 2; k < Math.floor((off + PW) / 9) + 2; k++) {
+    if (h1(k * 3.3) < 0.35) continue;
+    const px = k * 9 + Math.floor(h1(k * 7.1) * 6) - off;
+    const base = Math.round(112 - 7 * Math.sin((px + off) * 0.021) - 4 * Math.sin((px + off) * 0.053 + 1)) + 2;
+    const ht = 10 + Math.floor(h1(k * 5.9) * 14);
+    for (let y = 0; y < ht; y++) {
+      const tier = (y % 5) / 5, wdt = Math.floor((ht - y) * 0.32 + tier * 1.6);
+      for (let x = -wdt; x <= wdt; x++) put(px + x, base - y, x >= wdt - 1 && x > 0 ? P(3, 1) : P(3, 0), 2);
+    }
+    put(px, base - ht, P(3, 0), 2);
+  }
+}
+// cliff + colour-cycled waterfall (parallax .55)
+function drawFalls(cx, t) {
+  const off = cx * 0.55;
+  const X0 = 318, X1 = 452, WF0 = 372, WF1 = 396;
+  for (let x = 0; x < PW; x++) {
+    const wx = x + off;
+    if (wx < X0 - 30 || wx > X1 + 30) continue;
+    // cliff silhouette with a ragged top
+    const edge = Math.min(wx - X0, X1 - wx);
+    const ledge = Math.floor(n1(wx * 0.045 + 2) * 4) * 7;
+    const top = Math.round(54 + ledge - Math.min(edge, 16) * 0.6 + (h1(Math.floor(wx / 3)) - 0.5) * 2 + (edge < 0 ? 999 : 0));
+    for (let y = Math.max(top, 0); y < 132; y++) {
+      if (wx >= WF0 && wx < WF1 && y > top + 1) {
+        // waterfall: bands drift down (palette cycling)
+        const v = (y * 0.55 - t * 26 + n1(wx * 0.7) * 6 + (wx % 3) * 1.3);
+        const band = ((Math.floor(v) % 5) + 5) % 5;
+        let c = [P(4, 3), P(4, 4), P(4, 5), P(4, 4), P(4, 6)][band];
+        if (wx === WF0 || wx === WF1 - 1) c = P(4, 2);
+        if (y > 120 && h2(wx + Math.floor(t * 12), y) > 0.45) c = P(10, 0);          // foam
+        put(x, y, c, 3);
+        continue;
+      }
+      // voronoi rocks
+      const gx = wx / 13 + Math.floor(y / 9) * 0.37, gy = y / 7.5;
+      const ix = Math.floor(gx), iy = Math.floor(gy);
+      let d1 = 9, d2 = 9, cxr = 0, cyr = 0;
+      for (let j = -1; j <= 1; j++) for (let i = -1; i <= 1; i++) {
+        const fx = ix + i + h2(ix + i, iy + j) * 0.9, fy = iy + j + h2(iy + j + 17, ix + i) * 0.9;
+        const d = Math.hypot((gx - fx) * 1.0, (gy - fy) * 1.2);
+        if (d < d1) { d2 = d1; d1 = d; cxr = gx - fx; cyr = gy - fy; } else if (d < d2) d2 = d;
+      }
+      const edgeD = d2 - d1;
+      let c;
+      if (edgeD < 0.09) c = P(6, 0);
+      else { const l = -cxr * 0.6 - cyr * 0.9; c = l > 0.25 ? P(6, 3) : (l > -0.15 ? P(6, 2) : P(6, 1)); }
+      if (y - top < 2) c = P(3, 3);                                                      // moss lip
+      else if (y - top < 4 && bay(x, y) < 0.5) c = P(3, 2);
+      else if (n1(wx * 0.35 + y * 0.12) > 0.78 && y - top < 30 && edgeD > 0.09 && cyr < 0) c = P(3, 2);
+      if (y > 112) c = bay(x, y) < (y - 112) / 22 ? P(6, 0) : c;
+      put(x, y, c, 3);
+    }
+  }
+  // mist rising from the plunge pool
+  for (let i = 0; i < 26; i++) {
+    const a = (h1(i * 4.1) + t * (0.35 + h1(i) * 0.3)) % 1;
+    const x = WF0 - 8 + h1(i * 2.3) * 42 - off, y = 128 - a * 26;
+    if (bay(x | 0, y | 0) < 0.8 - a * 0.7) put(x, y, a < 0.4 ? P(4, 6) : P(4, 5), 3);
+  }
+}
+// giant trees (parallax .8)
+const TREES = [70, 250, 480, 720, 930];
+function drawTrees(cx) {
+  const off = cx * 0.8;
+  for (const tx of TREES) {
+    const x0 = tx - off;
+    if (x0 < -40 || x0 > PW + 40) continue;
+    const w = 13;
+    for (let y = 0; y < 142; y++) {
+      const flare = y > 128 ? (y - 128) * 0.7 : 0;
+      for (let x = -w / 2 - flare; x <= w / 2 + flare; x++) {
+        const fx = (x + w / 2 + flare) / (w + 2 * flare);
+        let c = fx > 0.72 ? P(5, 2) : (fx < 0.18 ? P(5, 0) : P(5, 1));
+        if (h2(Math.floor((x0 + x) / 1) + tx, Math.floor(y / 6)) > 0.8 && fx > 0.25 && fx < 0.7) c = P(5, 0);   // bark grooves
+        if (y % 11 === 0 && fx > 0.3 && fx < 0.6 && h1(tx + y) > 0.5) c = P(5, 2);
+        put(x0 + x, y, c, 4);
+      }
+    }
+    // canopy: overlapping leaf clusters, back to front, each outlined and lit from the upper right (moon)
+    const CL = [];
+    for (let k = 0; k < 16; k++) { const a = h1(tx + k * 3.1) * Math.PI * 2, rr = h1(tx * 0.7 + k) * 30; CL.push([Math.cos(a) * rr * 1.2, 8 + Math.sin(a) * rr * 0.55 - (k > 11 ? 10 : 0), 7 + h1(tx + k * 7.7) * 6]); }
+    CL.sort((a, b) => a[1] - b[1]);
+    for (const [ox, oy, r] of CL) {
+      for (let y = Math.floor(oy - r - 1); y <= oy + r + 1; y++) for (let x = Math.floor(ox - r - 1); x <= ox + r + 1; x++) {
+        const d = Math.hypot(x - ox, (y - oy) * 1.15) + (h2(tx + x, y) - 0.5) * 1.2;
+        if (d > r + 1) continue;
+        const sx = x0 + x;
+        if (d > r) { put(sx, y, P(3, 0), 4); continue; }
+        const l = ((x - ox) * 0.55 - (y - oy) * 0.75) / r;
+        let c = l > 0.45 ? P(3, 3) : (l > -0.1 ? P(3, 2) : P(3, 1));
+        if (l > 0.65 && bay(sx, y) < 0.5) c = P(3, 4);
+        if (h2(sx * 3 + tx, y * 5) > 0.93) c = P(3, 0);
+        put(sx, y, c, 4);
+      }
+    }
+  }
+}
+// playfield
+function drawPlay(cx, t) {
+  for (let x = 0; x < PW; x++) {
+    const wx = x + cx;
+    const gt = groundTop(wx);
+    if (gt < 999) {
+      for (let y = gt - 2; y < PH; y++) {
+        const d = y - gt;
+        let c;
+        if (d < 0) { if (h2(wx, 7) > (d === -1 ? 0.45 : 0.82)) c = d === -1 ? P(3, 5) : P(3, 6); else continue; }    // grass blades
+        else if (d === 0) c = P(3, 6);
+        else if (d < 3) c = P(3, 5);
+        else if (d < 5) c = bay(x, y) < 0.5 ? P(3, 3) : P(5, 2);
+        else {
+          c = P(5, 2);
+          const cell = h2(Math.floor(wx / 7), Math.floor((y - gt) / 5));
+          if (cell > 0.72) { const sx = wx % 7, sy = (y - gt) % 5; c = (sx > 0 && sx < 5 && sy > 0 && sy < 4) ? (sy === 1 ? P(6, 3) : P(6, 2)) : c; }
+          if (h2(wx, y) > 0.94) c = P(5, 3);
+          if (d > 12) c = bay(x, y) < (d - 12) / 14 ? P(5, 1) : c;
+        }
+        put(x, y, c, 5);
+      }
+      // flowers
+      if (h1(wx * 1.7) > 0.93 && wx % 3 === 0) { put(x, gt - 3, h1(wx) > 0.5 ? P(7, 5) : P(9, 4), 5); put(x, gt - 2, P(3, 4), 5); }
+      // step edge shading
+      if (wx === STEP[0]) for (let y = gt; y < 136; y++) put(x, y, P(3, 4), 5);
+    } else {
+      // pit / stream: dark walls then water with cycling ripples
+      const inGap = wx >= GAP[0] && wx < GAP[1];
+      const wl = inGap ? 156 : 148;
+      for (let y = 136; y < PH; y++) {
+        let c;
+        if (y < wl) c = inGap ? P(0, 0) : P(0, 1);
+        else {
+          const rp = ((Math.floor(wx * 0.15 + y * 0.9 - t * 3) % 6) + 6) % 6;
+          c = rp === 0 && h2(Math.floor(wx / 3), y) > 0.3 ? P(4, 4) : (y === wl ? P(4, 3) : P(4, 1 + ((y - wl) < 4 ? 1 : 0)));
+          // reflection of the moon-lit sky
+          if (!inGap && h2(wx, Math.floor(y + t * 4)) > 0.985) c = P(4, 5);
+        }
+        put(x, y, c, 5);
+      }
+    }
+  }
+  // signpost
+  { const sx = 128 - cx; if (sx > -20 && sx < PW + 20) {
+    for (let y = 116; y < 135; y++) { put(sx, y, P(5, 2), 5); put(sx + 1, y, P(5, 3), 5); }
+    for (let y = 114; y < 121; y++) for (let x = -6; x < 12; x++) { const edge = y === 114 || y === 120 || x === -6 || x === 11; put(sx + x, y, edge ? P(5, 1) : (y === 115 ? P(5, 5) : P(5, 4)), 5); }
+    for (let x = -3; x < 7; x++) put(sx + x, 117, P(5, 2), 5); put(sx + 7, 116, P(5, 2), 5); put(sx + 7, 118, P(5, 2), 5); put(sx + 8, 117, P(5, 2), 5);
+  } }
+  // bridge
+  for (let wx = BRIDGE[0] - 4; wx < BRIDGE[1] + 4; wx++) {
+    const x = wx - cx; if (x < -2 || x > PW + 2) continue;
+    const u = (wx - BRIDGE[0]) / (BRIDGE[1] - BRIDGE[0]);
+    const sag = Math.round(Math.sin(clamp(u) * Math.PI) * 3);
+    if (wx >= BRIDGE[0] && wx < BRIDGE[1]) {
+      const gap = (wx - BRIDGE[0]) % 6 === 5;
+      for (let k = 0; k < 3; k++) put(x, 135 + sag + k, gap ? P(5, 0) : (k === 0 ? P(5, 5) : P(5, 3)), 5);
+      put(x, 138 + sag, P(5, 1), 5);
+      put(x, 124 + Math.round(Math.sin(clamp(u) * Math.PI) * 5), P(5, 4), 5);            // rope rail
+      if ((wx - BRIDGE[0]) % 18 === 0) for (let y = 124 + Math.round(Math.sin(clamp(u) * Math.PI) * 5); y < 135 + sag; y++) put(x, y, P(5, 2), 5);
+    }
+  }
+  for (const px of [BRIDGE[0] - 3, BRIDGE[1] + 1]) { const x = px - cx; for (let y = 120; y < 142; y++) { put(x, y, P(5, 2), 5); put(x + 1, y, P(5, 3), 5); } put(x, 119, P(5, 4), 5); put(x + 1, 119, P(5, 4), 5); }
+}
+// the shrine at the end of the level
+function drawShrine(cx, t, open, glow) {
+  const x0 = 800 - cx, base = 131;
+  if (x0 < -60 || x0 > PW + 20) return;
+  // pillars
+  for (const px of [-22, 14]) for (let y = base - 42; y < base; y++) for (let x = 0; x < 8; x++) {
+    let c = x === 0 ? P(6, 1) : (x > 5 ? P(6, 4) : P(6, 3));
+    if ((y - base) % 7 === 0) c = P(6, 2);
+    put(x0 + px + x, y, c, 5);
+    // runes light up
+    if (x > 2 && x < 5 && (y - (base - 36)) % 8 < 4 && y < base - 8 && y > base - 38) put(x0 + px + x, y, glow > 0.5 ? P(4, 6) : P(4, 2), 5);
+  }
+  // lintel
+  for (let y = base - 50; y < base - 42; y++) for (let x = -28; x < 28; x++) { const c = y === base - 50 ? P(6, 5) : (y === base - 43 ? P(6, 1) : P(6, 3)); put(x0 + x, y, c, 5); }
+  for (let x = -5; x < 5; x++) for (let y = base - 49; y < base - 44; y++) if (Math.abs(x + 0.5) + Math.abs(y - (base - 46.5)) < 3.2) put(x0 + x, y, glow > 0.5 ? P(9, 5) : P(9, 2), 5);
+  // doorway: light behind, the door slides up
+  const dh = 34, dTop = base - 42;
+  for (let y = dTop; y < base; y++) for (let x = -14; x < 14; x++) {
+    const openPx = Math.round(open * dh);
+    const inDoor = y < base - openPx ? false : true;   // door bottom edge rises
+    const doorY = y + openPx;
+    if (y < base - 0 && y >= dTop && doorY < base) {
+      let c = ((x + 14) % 7 === 0) ? P(5, 0) : ((doorY - dTop) % 9 === 0 ? P(5, 1) : P(5, 2));
+      if (x === 0 && doorY > dTop + 14 && doorY < dTop + 18) c = P(9, 4);
+      put(x0 + x, y, c, 5);
+    } else {
+      const d = Math.abs(x) / 14;
+      put(x0 + x, y, d < 0.5 || bay(x0 + x, y) > d ? P(10, 0) : P(9, 5), 5);
+    }
+  }
+}
+/* ---------------- the hero ---------------- */
+const SB = new Uint8Array(24 * 26);     // sprite scratch buffer (0 = empty)
+function heroSprite(frame, jump, facing) {
+  SB.fill(0);
+  const set = (x, y, c) => { x |= 0; y |= 0; if (x >= 0 && y >= 0 && x < 24 && y < 26) SB[y * 24 + x] = c + 1; };
+  const ph = frame / 6 * Math.PI * 2;
+  const bob = jump ? 0 : (Math.sin(ph * 2) > 0 ? -1 : 0);
+  // legs
+  const legs = jump ? [[-1, -2], [2, -1]] : [[Math.round(Math.cos(ph) * 3), -Math.round(Math.max(0, Math.sin(ph)) * 2)], [Math.round(Math.cos(ph + Math.PI) * 3), -Math.round(Math.max(0, Math.sin(ph + Math.PI)) * 2)]];
+  legs.forEach(([fx, fy], i) => {
+    const hx = 10 + i * 2, hy = 19 + bob;
+    const ex = hx + fx, ey = 24 + fy;
+    for (let k = 0; k <= 4; k++) { const x = Math.round(lerp(hx, ex, k / 4)), y = Math.round(lerp(hy, ey, k / 4)); set(x, y, k > 2 ? P(5, 1) : P(5, 3)); set(x + 1, y, k > 2 ? P(5, 2) : P(5, 3)); }
+  });
+  // cloak (teal) with a fluttering hem and orange scarf
+  for (let y = 13; y < 21; y++) {
+    const half = 3 + Math.floor((y - 13) * 0.45);
+    for (let x = 11 - half; x <= 11 + half; x++) set(x, y + bob, x > 11 + half - 2 ? P(4, 4) : (x < 11 - half + 2 ? P(4, 2) : P(4, 3)));
+  }
+  for (let x = 7; x < 15; x++) set(x, 13 + bob, P(2, 3));
+  const fl = Math.round(Math.sin(ph * 2 + 1) * 1);
+  set(5, 13 + bob + fl, P(2, 3)); set(4, 14 + bob + fl, P(2, 4)); set(6, 13 + bob, P(2, 2)); set(3, 14 + bob + fl, P(2, 3));
+  // hood
+  for (let y = 0; y < 15; y++) for (let x = 0; x < 24; x++) {
+    const d = Math.hypot(x - 11, y - 8.2);
+    if (d > 6.1) continue;
+    const l = (x - 11) * -0.45 + (y - 8) * -0.65;
+    set(x, y + bob, l > 2.6 ? P(7, 4) : (l > 0.6 ? P(7, 3) : (l > -2 ? P(7, 2) : P(7, 1))));
+  }
+  set(5, 6 + bob, P(7, 2)); set(4, 5 + bob, P(7, 2)); set(4, 6 + bob, P(7, 1));     // hood point
+  // face opening (facing right): rim, skin, eyes
+  for (let y = 5; y < 14; y++) for (let x = 10; x < 18; x++) {
+    const d = Math.hypot(x - 13.6, y - 9.4);
+    if (d < 3.9) set(x, y + bob, d > 3.1 ? P(7, 0) : (x < 12 ? P(8, 2) : P(8, 3)));
+  }
+  set(14, 8 + bob, P(0, 0)); set(14, 9 + bob, P(0, 0)); set(16, 8 + bob, P(0, 0)); set(16, 9 + bob, P(0, 0));   // eyes
+  set(14, 8 + bob, P(0, 1));
+  set(15, 11 + bob, P(7, 4)); set(12, 11 + bob, P(7, 4));                                                         // cheeks
+  // arm + lantern on a short pole
+  const sw = jump ? -2 : Math.round(Math.sin(ph) * 1);
+  set(14, 14 + bob, P(4, 3)); set(15, 14 + bob, P(8, 3)); set(16, 13 + bob + sw, P(5, 3)); set(17, 13 + bob + sw, P(5, 3)); set(18, 14 + bob + sw, P(5, 2));
+  const lx = 18, ly = 15 + bob + sw;
+  set(lx, ly, P(6, 1)); set(lx + 1, ly, P(6, 1));
+  for (let y = 1; y < 4; y++) { set(lx - 1, ly + y, P(6, 1)); set(lx, ly + y, P(9, 5)); set(lx + 1, ly + y, P(9, 4)); set(lx + 2, ly + y, P(6, 1)); }
+  set(lx, ly + 4, P(6, 1)); set(lx + 1, ly + 4, P(6, 1));
+  // auto outline
+  const out = new Uint8Array(SB);
+  for (let y = 0; y < 26; y++) for (let x = 0; x < 24; x++) {
+    if (SB[y * 24 + x]) continue;
+    const nb = (x > 0 && SB[y * 24 + x - 1]) || (x < 23 && SB[y * 24 + x + 1]) || (y > 0 && SB[(y - 1) * 24 + x]) || (y < 25 && SB[(y + 1) * 24 + x]);
+    if (nb) out[y * 24 + x] = P(0, 0) + 1;
+  }
+  return { px: out, lantern: [lx + 0.5, ly + 2] };
+}
+function drawHero(sx, sy, frame, jump) {
+  const s = heroSprite(frame, jump);
+  for (let y = 0; y < 26; y++) for (let x = 0; x < 24; x++) { const v = s.px[y * 24 + x]; if (v) put(sx + x - 11, sy + y - 25, v - 1, 6); }
+  return [sx + s.lantern[0] - 11, sy + s.lantern[1] - 25];
+}
+/* ---------------- hero path ---------------- */
+const SPEED = 106, T0 = 0.35, X0 = 34;
+const JUMPS = [{ x0: 250, x1: 312, h: 30 }, { x0: 570, x1: 632, h: 33 }];
+function heroAt(t) {
+  let x = X0 + Math.max(0, t - T0) * SPEED;
+  const stop = 800 - 6;
+  let stopped = false;
+  if (x >= stop) { x = stop; stopped = true; }
+  let y = x >= STEP[0] - 2 ? 131 : 135, jump = false, land = -1;
+  for (const j of JUMPS) {
+    if (x >= j.x0 && x < j.x1) { const u = (x - j.x0) / (j.x1 - j.x0); y = 135 - j.h * 4 * u * (1 - u); jump = true; }
+    if (x >= j.x1) land = Math.max(land, T0 + (j.x1 - X0) / SPEED);
+  }
+  // victory hop
+  if (t > 8.75 && t < 9.25) { const u = (t - 8.75) / 0.5; y = 131 - 14 * 4 * u * (1 - u); jump = true; }
+  return { x, y, jump, stopped, land };
+}
+
+/* ---------------- frame ---------------- */
+const GEM = [601, 101];
+const gemTime = T0 + (601 - X0) / SPEED;
+const doorT = 7.85;
+function drawGem(cx, t) {
+  if (t > gemTime) return;
+  const x0 = GEM[0] - cx, y0 = GEM[1] + Math.round(Math.sin(t * 4) * 1.5);
+  const rows = [[0, 0], [-1, 1], [-2, 2], [-3, 3], [-3, 3], [-2, 2], [-1, 1], [0, 0]];
+  rows.forEach(([a, b], j) => { for (let i = a - 1; i <= b + 1; i++) put(x0 + i, y0 + j, P(0, 0), 6); });
+  rows.forEach(([a, b], j) => { for (let i = a; i <= b; i++) put(x0 + i, y0 + j, i < 0 ? P(4, 6) : (i === 0 ? P(4, 5) : P(4, 3)), 6); });
+  put(x0 - 1, y0 + 2, P(10, 0), 6);
+  if ((t * 3) % 1 < 0.5) { put(x0 + 3, y0 - 2, P(10, 0), 6); put(x0 + 3, y0 - 3, P(4, 6), 6); put(x0 + 3, y0 - 1, P(4, 6), 6); put(x0 + 2, y0 - 2, P(4, 6), 6); put(x0 + 4, y0 - 2, P(4, 6), 6); }
+}
+function drawFG(cx, t) {
+  const off = cx * 1.25;
+  for (let x = 0; x < PW; x++) {
+    const wx = x + off;
+    const ht = Math.round(5 + n1(wx * 0.08) * 7 + (h1(Math.floor(wx / 2)) > 0.6 ? 3 : 0));
+    for (let y = PH - ht; y < PH; y++) put(x, y, y === PH - ht ? P(3, 1) : P(0, 0), 7);
+  }
+  // fern clumps
+  for (let k = Math.floor(off / 140) - 1; k < Math.floor((off + PW) / 140) + 2; k++) {
+    const fx = k * 140 + 40 + h1(k) * 60 - off;
+    for (let a = 0; a < 7; a++) {
+      const ang = -Math.PI / 2 + (a - 3) * 0.35 + Math.sin(t * 1.5 + a) * 0.04;
+      const len = 18 + (3 - Math.abs(a - 3)) * 5;
+      for (let s = 0; s < len; s++) { const x = fx + Math.cos(ang) * s + Math.sin(s * 0.2) * (a - 3) * 0.6, y = PH - 2 + Math.sin(ang) * s + s * s * 0.012; put(x, y, P(0, 0), 7); if (s % 3 === 0 && s > 4) { put(x - 1, y + 1, P(0, 0), 7); put(x + 1, y + 1, P(0, 0), 7); } }
+    }
+  }
+}
+const FIREFLIES = Array.from({ length: 12 }, (_, i) => ({ x: 60 + i * 70 + h1(i) * 40, y: 96 + h1(i * 3) * 30, p: h1(i * 7) * 6.28 }));
+function lights(cx, t, lantern, open) {
+  // lantern: dithered pool of warm light on the world (not on the sky/background)
+  const [lx, ly] = lantern;
+  const R1 = 16, R2 = 40;
+  for (let y = Math.max(0, ly - R2 | 0); y < Math.min(PH, ly + R2); y++) for (let x = Math.max(0, lx - R2 | 0); x < Math.min(PW, lx + R2); x++) {
+    const i = y * PW + x; if (dep[i] < 4) continue;
+    const d = Math.hypot(x - lx, (y - ly) * 1.15);
+    const k = d < R1 ? 2 : (d < R2 && bay(x, y) < (R2 - d) / (R2 - R1) * 1.1 ? 1 : 0);
+    if (k) bump(x, y, dep[i] === 4 ? Math.min(k, 1) : k, 4);
+  }
+  // halo around the lantern itself
+  for (let y = -5; y <= 5; y++) for (let x = -5; x <= 5; x++) { const d = Math.hypot(x, y); if (d < 5 && d > 1.5 && bay(lx + x | 0, ly + y | 0) < (5 - d) / 4) bump(lx + x, ly + y, 1, 0); }
+  // fireflies
+  FIREFLIES.forEach((f, i) => {
+    const x = f.x + Math.sin(t * 1.3 + f.p) * 9 - cx, y = f.y + Math.sin(t * 1.9 + f.p * 2) * 5;
+    if (x < -5 || x > PW + 5) return;
+    const on = (Math.sin(t * 3 + f.p * 3) + 1) / 2;
+    if (on < 0.25) return;
+    put(x, y, P(9, 5), 6);
+    for (let yy = -3; yy <= 3; yy++) for (let xx = -3; xx <= 3; xx++) { const d = Math.hypot(xx, yy); if (d > 0.5 && d < 3.5 && bay(x + xx | 0, y + yy | 0) < (3.5 - d) / 3 * on) bump(x + xx, y + yy, 1, 0); }
+  });
+  // light pouring out of the open door
+  if (open > 0) {
+    const dx = 800 - cx;
+    for (let y = 60; y < 150; y++) for (let x = -70; x < 70; x++) {
+      const sx = dx + x, sy = y; if (sx < 0 || sx >= PW) continue;
+      const rel = (y - 89) / 60;
+      const spread = 14 + Math.max(0, rel) * 40 + Math.max(0, -rel) * 20;
+      const beam = Math.abs(x) / spread;
+      if (beam > 1 || y > 140) continue;
+      const rays = 0.5 + 0.5 * Math.sin(Math.atan2(x, y - 70) * 9 + t * 1.5);
+      if (bay(sx, sy) < (1 - beam) * open * (0.35 + 0.4 * rays)) bump(sx, sy, 1, 1);
+    }
+  }
+}
+function hud(t, gems) {
+  // hearts
+  const HEART = ['0110110', '1111111', '1111111', '0111110', '0011100', '0001000'];
+  for (let k = 0; k < 3; k++) {
+    for (let y = -1; y < 7; y++) for (let x = -1; x < 8; x++) {
+      const inside = (yy, xx) => yy >= 0 && yy < 6 && xx >= 0 && xx < 7 && HEART[yy][xx] === '1';
+      if (inside(y, x)) put(6 + k * 10 + x, 6 + y, y === 1 && x === 1 ? P(10, 0) : (x > 4 || y > 3 ? P(7, 2) : P(7, 4)), 9);
+      else if (inside(y + 1, x) || inside(y - 1, x) || inside(y, x + 1) || inside(y, x - 1)) put(6 + k * 10 + x, 6 + y, P(0, 0), 9);
+    }
+  }
+  // gem counter
+  const gx = 262, gy = 6;
+  [[0, 0], [-1, 1], [-2, 2], [-2, 2], [-1, 1], [0, 0]].forEach(([a, b], j) => { for (let i = a - 1; i <= b + 1; i++) put(gx + i, gy + j, P(0, 0), 9); });
+  [[0, 0], [-1, 1], [-2, 2], [-2, 2], [-1, 1], [0, 0]].forEach(([a, b], j) => { for (let i = a; i <= b; i++) put(gx + i, gy + j, i < 0 ? P(4, 6) : P(4, 4), 9); });
+  text('x' + String(gems).padStart(2, '0'), gx + 5, gy - 1, gems > 2 && t < gemTime + 0.5 && (t * 10 | 0) % 2 ? P(9, 5) : P(10, 0), 1);
+}
+const parts = [];
+function burst(x, y, n, ramp, seed) { for (let i = 0; i < n; i++) parts.push({ x, y, a: h1(seed + i) * 6.28, v: 18 + h1(seed + i * 3) * 30, ramp }); }
+
+Reel.scene({
+  duration: 10, fps: 30,
+  cues: [{ t: T0 + (JUMPS[0].x0 - X0) / SPEED, sfx: 'jump' }, { t: T0 + (JUMPS[1].x0 - X0) / SPEED, sfx: 'jump' }, { t: gemTime, sfx: 'coin' },
+    { t: doorT, sfx: 'powerup' }, { t: 8.45, sfx: 'levelup' }, { t: 8.75, sfx: 'jump' }],
+  render(t) {
+    const hero = heroAt(t);
+    const cx = Math.round(clamp(hero.x - 112, 0, WW - PW));
+    drawSky(t);
+    drawMountains(cx);
+    drawHills(cx);
+    drawFalls(cx, t);
+    drawTrees(cx);
+    drawPlay(cx, t);
+    const open = E.inOutSine(clamp((t - doorT) / 0.8));
+    const glow = t > doorT - 0.3 ? 1 : 0;
+    drawShrine(cx, t, open, glow);
+    drawGem(cx, t);
+    // hero
+    const frame = Math.floor(t * 12) % 6;
+    const hx = Math.round(hero.x - cx), hy = Math.round(hero.y);
+    const lantern = drawHero(hx, hy, hero.stopped && !hero.jump ? 0 : frame, hero.jump || (hero.stopped && false));
+    // particles: landing dust + gem sparkle
+    const P1 = [];
+    for (const j of JUMPS) { const tl = T0 + (j.x1 - X0) / SPEED, u = t - tl; if (u > 0 && u < 0.4) for (let i = 0; i < 7; i++) { const a = Math.PI + (i / 6) * Math.PI, r = u * 40; P1.push([j.x1 - cx + Math.cos(a) * r * 0.9, 134 - Math.abs(Math.sin(a)) * r * 0.25 - u * 6, u < 0.2 ? P(6, 5) : P(6, 4), bay(i, 3) < 1 - u / 0.4]); } }
+    { const u = t - gemTime; if (u > 0 && u < 0.7) for (let i = 0; i < 14; i++) { const a = i / 14 * Math.PI * 2, r = 6 + u * 46; P1.push([GEM[0] - cx + Math.cos(a) * r, GEM[1] + 3 + Math.sin(a) * r * 0.8, i % 2 ? P(9, 5) : P(10, 0), u < 0.5 || i % 3 === 0]); }
+      if (u > 0 && u < 0.9) text('+1', GEM[0] - cx - 5, GEM[1] - 12 - Math.round(u * 14), P(9, 5), 1); }
+    P1.forEach(([x, y, c, on]) => { if (on) put(x, y, c, 6); });
+    drawFG(cx, t);
+    lights(cx, t, lantern, open);
+    // HUD + banner
+    hud(t, t > gemTime ? 3 : 2);
+    if (t > 8.35) {
+      const u = t - 8.35;
+      const s = C.clear;
+      const sc = 2, wdt = s.length * 6 * sc;
+      const x0 = Math.round((PW - wdt) / 2);
+      [...s].forEach((ch, i) => {
+        const v = clamp((u - i * 0.04) / 0.25);
+        if (v <= 0) return;
+        const yy = Math.round(44 - (1 - E.outBack(v)) * 20);
+        text(ch, x0 + i * 6 * sc, yy, (Math.floor(t * 8) + i) % 6 === 0 ? P(10, 0) : P(9, 4), sc);
+      });
+      // three stars pop in
+      for (let k = 0; k < 3; k++) {
+        const v = clamp((u - 0.45 - k * 0.18) / 0.2);
+        if (v <= 0) continue;
+        const sx = PW / 2 - 22 + k * 22, sy = 72 - (k === 1 ? 3 : 0);
+        const r = 5 * E.outBack(v);
+        for (let y = -7; y <= 7; y++) for (let x = -7; x <= 7; x++) {
+          const a = Math.atan2(y, x), d = Math.hypot(x, y);
+          const star = r * (0.55 + 0.45 * Math.cos(a * 5 + Math.PI / 2));
+          if (d < star + 0.8) put(sx + x, sy + y, d < star - 0.5 ? (x + y < 0 ? P(9, 5) : P(9, 3)) : P(0, 0), 9);
+        }
+      }
+    }
+    // to RGBA, scale x4 crisp
+    const d32 = new Uint32Array(img.data.buffer);
+    for (let i = 0; i < buf.length; i++) d32[i] = PAL[buf[i]];
+    sctx.putImageData(img, 0, 0);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(small, 0, 0, W, H);
+  },
+});
+</script></body></html>

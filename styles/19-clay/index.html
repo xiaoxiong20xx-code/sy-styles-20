@@ -1,0 +1,455 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>19 黏土定格 · Claymation</title>
+<script src="../../lib/core.js"></script><script src="../../lib/gl.js"></script><script src="../../lib/rm.js"></script>
+<style>
+  #cap{position:absolute;left:0;right:0;top:64px;text-align:center;font-family:'Noto Sans CJK SC';font-weight:900;font-size:64px;color:#4a3426;letter-spacing:.12em;padding-left:.12em;text-shadow:0 2px 0 rgba(255,240,220,.35)}
+  #cap small{display:block;font:600 19px Inter;letter-spacing:.55em;padding-left:.55em;color:rgba(74,52,38,.6);margin-top:14px}
+</style>
+</head><body><div id="stage"></div>
+<script>
+/* ===== 19 黏土定格 · CLAYMATION =====
+   A tabletop miniature shot at 12 frames per second. Three lumps of plasticine drop onto a clay meadow,
+   get kneaded together (the colours marble) and are pulled into a little robin: beak, eyes, wings, tail.
+   It blinks, hops, chirps out a clay note and flaps. Every drawing re-shapes the fingerprints and lumps
+   ("boil"), the exposure flickers like a real stop-motion stage, and a macro lens blurs the paper-cloud
+   backdrop and fairy lights into bokeh. Raymarched: wrap lighting + warm subsurface, soft key shadows, AO. */
+const { E, clamp, inv, lerp } = Reel;
+const stage = Reel.makeStage('#d9c7b0');
+Reel.ownJitter = true;
+const C = Reel.cfg({ cap: '手作的温度', capEn: 'CLAYMATION · 12 FPS' });
+
+const rm = Reel.RM(stage, {
+  bloom: 0.34, th: 1.1, expo: 0.9, vig: 0.5, grain: 0.03, ca: 0.4, contrast: 1.16, sat: 1.12, bands: 10,
+  uniforms: `
+uniform vec4 uBirdP;      // position xyz, yaw
+uniform vec4 uBirdA;      // squash, head yaw, head roll, beak open
+uniform vec4 uBirdB;      // wing lift, eye open, morph (blob -> bird), body visible
+uniform vec4 uBalls[3];   // the three lumps before they merge: pos, radius
+uniform float uMerge;     // 0 separate .. 1 one kneaded lump
+uniform vec4 uNote;       // clay music note: pos, scale (0 = hidden)
+uniform vec3 uRo, uTa;
+uniform float uFrame, uFlick;`,
+  scene: `
+const vec3 LDIR = normalize(vec3(-.55,.78,.42));
+const vec3 FDIR = normalize(vec3(.8,.35,.5));
+const vec3 RDIR = normalize(vec3(.45,.55,-.75));
+bool gCheap = false;
+float boil(vec3 p, float a){ return (vnoise(p*7.3 + uFrame*1.37) - .5)*a + (vnoise(p*3.1 + 4.2) - .5)*a*1.3; }
+float fingerprint(vec3 p){
+  // concentric ridges around a few press points
+  float f = 0.;
+  vec3 C4[4] = vec3[4](vec3(.3,.5,.36), vec3(.3,.5,-.36), vec3(.2,.95,.24), vec3(.42,.42,0.));
+  for (int i=0;i<4;i++){
+    vec3 d = p - C4[i];
+    float r = length(d*vec3(1., 1.45, 1.)) + (vnoise(p*18.) - .5)*.02;
+    if (r < .17) f += sin(r*250. + float(i)*2.)*smoothstep(.17, .05, r)*smoothstep(.35, .65, vnoise(p*9. + float(i)*5.));
+  }
+  return f;
+}
+// ---------------- the robin ----------------
+vec3 birdLocal(vec3 p){
+  vec3 q = p - uBirdP.xyz;
+  q = rotY(uBirdP.w)*q;
+  float sq = uBirdA.x;
+  q.y /= sq; q.xz *= sqrt(sq);
+  return q;
+}
+float wingD(vec3 q, float fs, float wl, float grow){
+  vec3 wq = q - vec3(.1,.7,.33*fs);
+  wq = rotX(fs*wl)*wq;
+  wq = rotZ(.3)*wq;
+  return sdEllipsoid(wq - vec3(-.15,-.16,.045*fs), vec3(.26,.17,.07)*grow + .004);
+}
+vec3 headLocal(vec3 q){
+  vec3 h = q - vec3(.26,.86,0.);
+  h = rotY(uBirdA.y)*h;
+  h = rotX(uBirdA.z)*h;
+  return h;
+}
+float sdBirdLocal(vec3 q, out float part){
+  float morph = uBirdB.z;
+  // body + head
+  float body = sdEllipsoid(q - vec3(0.,.48,0.), vec3(.5,.44,.43));
+  vec3 h = headLocal(q);
+  float head = length(h - vec3(.05,.08,0.)) - .31*smoothstep(.0, .5, morph);
+  float d = smin(body, head, .2);
+  part = 0.;
+  // tail, pulled out of the back
+  vec3 tq = q - vec3(-.5,.66,0.); tq = rotZ(-.78)*tq;
+  float tail = sdEllipsoid(tq - vec3(-.06,0.,0.), vec3(.21*smoothstep(.3, .8, morph) + .01, .055, .12));
+  d = smin(d, tail, .08);
+  // wings, flattened onto the flanks; lift = flap
+  float wl = uBirdB.x;
+  for (int s=-1;s<=1;s+=2){
+    float wing = wingD(q, float(s), wl, smoothstep(.45, .85, morph));
+    if (wing < d){ part = 2.; }
+    d = smin(d, wing, .025);
+  }
+  // beak (two halves that open when chirping)
+  float bo = uBirdA.w;
+  vec3 bq = h - vec3(.33,.06,0.);
+  float bl = .17*smoothstep(.55, .9, morph);
+  vec3 b1 = rotZ(-bo*.5)*bq, b2 = rotZ(bo*.5)*bq;
+  float beakU = max(sdCapsule(b1, vec3(0.), vec3(bl,0.,0.), .075*(1. - clamp(b1.x/max(bl,.01),0.,1.)) + .004), -b1.y);
+  float beakL = max(sdCapsule(b2, vec3(0.), vec3(bl*.85,0.,0.), .065*(1. - clamp(b2.x/max(bl*.85,.01),0.,1.)) + .004), b2.y);
+  float beak = min(beakU, beakL);
+  if (beak < d){ d = beak; part = 3.; }
+  // eyes: black beads
+  float eo = uBirdB.y*smoothstep(.75, 1., morph);
+  for (int s=-1;s<=1;s+=2){
+    vec3 eq = h - vec3(.22,.15,.2*float(s));
+    eq.y /= max(eo, .08);
+    float eye = (length(eq) - .052)*max(eo, .08);
+    if (eye < d){ d = eye; part = 4.; }
+  }
+  // legs + toes
+  if (q.y < .3) for (int s=-1;s<=1;s+=2){
+    vec3 lq = q - vec3(.05,0.,.13*float(s));
+    float leg = sdCapsule(lq, vec3(0.,.02,0.), vec3(-.02,.14,0.), .024);
+    leg = min(leg, sdCapsule(lq, vec3(0.,.02,0.), vec3(.12,.015,.05*float(s)), .018));
+    leg = min(leg, sdCapsule(lq, vec3(0.,.02,0.), vec3(.13,.015,-.03*float(s)), .018));
+    leg = min(leg, sdCapsule(lq, vec3(0.,.02,0.), vec3(-.09,.015,0.), .016));
+    leg = mix(1e3, leg, step(.85, morph));
+    if (leg < d){ d = leg; part = 5.; }
+  }
+  return d;
+}
+float sdBlob(vec3 p){
+  float k = .12 + uMerge*.35;
+  float d = length(p - uBalls[0].xyz) - uBalls[0].w;
+  d = smin(d, length(p - uBalls[1].xyz) - uBalls[1].w, k);
+  d = smin(d, length(p - uBalls[2].xyz) - uBalls[2].w, k);
+  return d;
+}
+// ---------------- props ----------------
+float sdMush(vec3 p, vec3 c, float s, out float part){
+  vec3 q = (p - c)/s;
+  float stem = sdRoundCylinder(q - vec3(0.,.28,0.), .09, .05, .28);
+  float cap = max(sdEllipsoid(q - vec3(0.,.6,0.), vec3(.42,.3,.42)), -(q.y - .5));
+  part = cap < stem ? 1. : 0.;
+  return min(stem, cap)*s;
+}
+float sdFlower(vec3 p, vec3 c, float s, float ph, out float part){
+  vec3 q = (p - c)/s;
+  float stem = sdCapsule(q, vec3(0.), vec3(.05*sin(ph),.75,0.), .025);
+  vec3 f = q - vec3(.05*sin(ph),.78,0.);
+  f = rotX(-.5)*f;
+  float ctr = length(f*vec3(1.,1.6,1.)) - .07;
+  float a = atan(f.z, f.x), r = length(f.xz);
+  float pet = max(r - (.2 + .05*cos(a*5.)), abs(f.y) - .02 - .03*r) ;
+  pet = max(pet, -(r - .06));
+  part = ctr < pet ? 2. : 1.;
+  float fl = min(ctr, pet);
+  if (stem < fl) part = 0.;
+  return min(stem, fl)*s;
+}
+const vec3 MSH[2] = vec3[2](vec3(-1.25,0.,-.55), vec3(-.82,0.,-1.15));
+const vec4 FLW[3] = vec4[3](vec4(1.05,0.,-.62,.95), vec4(1.38,0.,-.18,.8), vec4(.82,0.,-1.05,.85));
+// returns (distance, material)
+//  1 ground  2 wood  3 backdrop  4 bird  5 beak  6 eye  7 legs  8 cap  9 stem  10 petal  11 flower centre
+//  12 green stem  13 pebble  14 paper cloud  15 string  16 bulb  17 note  18 blob
+vec2 map(vec3 p){
+  // clay meadow: a thick disc with a rolled edge on a wooden board
+  float rr = length(p.xz);
+  float ground = sdRoundCylinder(p - vec3(0.,-.14,0.), 1.45, .1, .06);
+  if (ground < .06 && !gCheap) ground -= ((vnoise2(p.xz*2.1) - .5)*.022 + (vnoise2(p.xz*7.3 + uFrame*1.37) - .5)*.01 + sin(length(p.xz - vec2(.9,1.3))*240.)*smoothstep(.3,.0,length(p.xz - vec2(.9,1.3)))*.0015)*smoothstep(2.9, 2.5, rr);
+  vec2 r = vec2(ground, 1.);
+  float wood = p.y + .3;
+  if (wood < r.x) r = vec2(wood, 2.);
+  float back = p.z + 3.6;                              // painted backdrop card
+  if (back < r.x) r = vec2(back, 3.);
+  // bird or the lumps it is made from
+  if (uBirdB.w > .5){
+    vec3 q = birdLocal(p);
+    if (length(q - vec3(0.,.55,0.)) < r.x + 1.){
+      float part;
+      float b = sdBirdLocal(q, part);
+      if (uBirdB.z < .999) b = mix(sdBlob(p) , b, smoothstep(0., 1., uBirdB.z));
+      b *= min(uBirdA.x, 1.);
+      if (b < .05 && !gCheap) b += boil(q*1.3, .014) + fingerprint(q)*.0013;
+      if (b < r.x) r = vec2(b, part < .5 ? 4. : (part < 2.5 ? 4. : (part < 3.5 ? 5. : (part < 4.5 ? 6. : 7.))));
+    }
+  } else {
+    float bl = sdBlob(p);
+    if (bl < .05 && !gCheap) bl += boil(p*1.3, .012) + fingerprint(p - uBalls[0].xyz)*.0018;
+    if (bl < r.x) r = vec2(bl, 18.);
+  }
+  // mushrooms
+  for (int i=0;i<2;i++){
+    if (length(p - MSH[i] - vec3(0.,.4,0.)) < r.x + .7){
+      float part; float m = sdMush(p, MSH[i], i == 0 ? .95 : .7, part);
+      if (m < .03) m += boil(p*1.6 + float(i), .006);
+      if (m < r.x) r = vec2(m, part > .5 ? 8. : 9.);
+    }
+  }
+  // flowers
+  for (int i=0;i<3;i++){
+    vec4 f = FLW[i];
+    if (length(p - f.xyz - vec3(0.,.4*f.w,0.)) < r.x + .6){
+      float part; float m = sdFlower(p, f.xyz, f.w, float(i)*2.1, part);
+      if (m < r.x) r = vec2(m, part < .5 ? 12. : (part < 1.5 ? 10. : 11.));
+    }
+  }
+  // clay grass tufts (three rolled blades each)
+  if (p.y < .32){
+    for (int i=0;i<7;i++){
+      float fi = float(i);
+      vec2 c = vec2(-1.6 + fi*.52 + .2*sin(fi*2.7), .35 + .9*sin(fi*1.9) - (fi > 3. ? 1.1 : 0.));
+      vec3 q = p - vec3(c.x, 0., c.y);
+      if (length(q.xz) > .25 + r.x) continue;
+      float tf = 1e3;
+      for (int j=0;j<3;j++){
+        float a = fi*1.7 + float(j)*2.1;
+        vec3 tip = vec3(cos(a)*.07, .2 + .06*sin(fi + float(j)), sin(a)*.07);
+        tf = min(tf, sdCapsule(q, vec3(cos(a)*.02, 0., sin(a)*.02), tip*.8, .034*(1. - clamp(q.y/.22, 0., 1.)*.6)));
+      }
+      if (tf < r.x) r = vec2(tf, 12.);
+    }
+  }
+  // pebbles
+  if (length(p - vec3(.05,0.,.68)) - .95 < r.x) {
+    float pb = sdEllipsoid(p - vec3(.55,.0,.75), vec3(.13,.08,.11));
+    pb = min(pb, sdEllipsoid(p - vec3(.78,.0,.62), vec3(.08,.05,.07)));
+    pb = min(pb, sdEllipsoid(p - vec3(-.7,.0,.55), vec3(.11,.07,.1)));
+    if (pb < .03) pb += boil(p*2.5, .005);
+    if (pb < r.x) r = vec2(pb, 13.);
+  }
+  // clay music note
+  if (uNote.w > .01){
+    vec3 q = (p - uNote.xyz)/uNote.w;
+    q = rotY(.4)*q;
+    float hd = sdEllipsoid(rotZ(.45)*q, vec3(.11,.08,.05));
+    float st = sdCapsule(q, vec3(.09,.02,0.), vec3(.09,.38,0.), .022);
+    float fl = sdCapsule(q, vec3(.09,.38,0.), vec3(.21,.24,0.), .022);
+    float n = min(hd, min(st, fl))*uNote.w + boil(q, .004);
+    if (n < r.x) r = vec2(n, 17.);
+  }
+  // paper clouds hanging on strings, and a string of fairy lights (far back, out of focus)
+  if (p.z + 2.62 < r.x) {
+    vec3 c1 = p - vec3(-1.1,2.05,-2.7), c2 = p - vec3(1.6,2.45,-3.1);
+    float cl = max(min(min(length(c1.xy*vec2(.8,1.25)) - .42, length((c1.xy - vec2(.38,-.08))*vec2(.9,1.3)) - .3), length((c1.xy + vec2(.4,.06))*vec2(.9,1.35)) - .28), abs(c1.z) - .012);
+    cl = min(cl, max(min(length(c2.xy*vec2(.8,1.3)) - .36, length((c2.xy - vec2(.33,-.07))*vec2(.9,1.3)) - .26), abs(c2.z) - .012));
+    if (cl < r.x) r = vec2(cl, 14.);
+    float sg = min(length(p.xz - vec2(-1.1,-2.7)) - .006 + max(2.38 - p.y, 0.)*10., length(p.xz - vec2(1.6,-3.1)) - .006 + max(2.7 - p.y, 0.)*10.);
+    if (sg < r.x) r = vec2(sg, 15.);
+    for (int i=0;i<9;i++){
+      float fi = float(i);
+      vec3 lp = vec3(-3.4 + fi*.85, 2.9 - .35*sin(fi*.85 + .3) - .22*sin(fi*2.1), -3.4);
+      float bulb = length(p - lp) - .06;
+      if (bulb < r.x) r = vec2(bulb, 16.);
+    }
+  }
+  return r;
+}
+float mapS(vec3 p){ return map(p).x; }
+vec3 nrm(vec3 p, float t){ vec2 k = vec2(1.,-1.)*(.0006 + .0002*t);
+  return normalize(k.xyy*mapS(p+k.xyy) + k.yyx*mapS(p+k.yyx) + k.yxy*mapS(p+k.yxy) + k.xxx*mapS(p+k.xxx)); }
+float shadow(vec3 ro){
+  float res = 1., t = .015;
+  gCheap = true;
+  for (int i=0;i<26;i++){ float h = mapS(ro + LDIR*t); res = min(res, 6.*h/t); t += clamp(h, .025, .35); if (res < .002 || t > 4.) break; }
+  gCheap = false;
+  return clamp(res, 0., 1.);
+}
+float ao(vec3 p, vec3 n){ float o = 0., s = 1.; gCheap = true;
+  for (int i=0;i<4;i++){ float h = .02 + .09*float(i); o += (h - mapS(p + n*h))*s; s *= .7; } gCheap = false; return clamp(1. - 2.3*o, 0., 1.); }
+vec3 blobAlbedo(vec3 p){
+  // each lump keeps its colour; where they were pressed together the colours streak
+  float d0 = length(p - uBalls[0].xyz) - uBalls[0].w, d1 = length(p - uBalls[1].xyz) - uBalls[1].w, d2 = length(p - uBalls[2].xyz) - uBalls[2].w;
+  vec3 sw = vec3(vnoise(p*6.), vnoise(p*6. + 7.), vnoise(p*6. + 3.))*.12*uMerge;
+  d0 += sw.x; d1 += sw.y; d2 += sw.z;
+  vec3 c = vec3(.42,.25,.14);
+  if (d1 < d0 && d1 < d2) c = vec3(.92,.42,.15);
+  if (d2 < d0 && d2 < d1) c = vec3(.96,.88,.72);
+  return c;
+}
+vec3 birdAlbedo(vec3 p, out float seam){
+  vec3 q = birdLocal(p);
+  vec3 h = headLocal(q);
+  vec3 brown = vec3(.42,.25,.14), orange = vec3(.92,.42,.15), cream = vec3(.96,.88,.72), dark = vec3(.3,.18,.1);
+  // orange face + breast, cream belly, brown crown/back/wings
+  float breast = length((q - vec3(.32,.55,0.))*vec3(1.,1.05,.92)) - .44;
+  float face = length((h - vec3(.18,.0,0.))*vec3(1.,1.15,.95)) - .22;
+  float orz = min(breast, face);
+  float bel = length((q - vec3(.16,.16,0.))*vec3(1.,1.2,.9)) - .3;
+  vec3 c = brown;
+  c = mix(c, orange, smoothstep(.006, -.006, orz));
+  c = mix(c, cream, smoothstep(.006, -.006, bel));
+  // wings darker, with a couple of pressed feather lines
+  float wing = 1e3;
+  for (int s=-1;s<=1;s+=2) wing = min(wing, wingD(q, float(s), uBirdB.x, 1.) - .008);
+  c = mix(c, dark, smoothstep(.012, .0, wing));
+  // pink cheeks
+  for (int s=-1;s<=1;s+=2){ float ck = length(h - vec3(.26,.0,.23*float(s))) - .06; c = mix(c, vec3(.95,.52,.5), smoothstep(.008, -.004, ck)); }
+  seam = min(min(abs(orz), abs(bel)), abs(wing))*(uBirdB.z > .8 ? 1. : 10.);
+  // while it is still a lump: marbled colours
+  float mz = 1. - smoothstep(.55, .95, uBirdB.z);
+  if (mz > 0.) c = mix(c, blobAlbedo(p), mz);
+  return c;
+}
+vec3 albedo(float m, vec3 p, out float rough, out float seam){
+  rough = .55; seam = 1.;
+  if (m < 1.5){ vec3 g = mix(vec3(.12,.29,.09), vec3(.22,.4,.13), smoothstep(.3,.7, vnoise(vec3(p.xz*3.,1.)))); return g*(.9 + .14*vnoise(p*20.)); }
+  if (m < 2.5){ float gr = sin(p.x*26. + 4.*vnoise(vec3(p.xz*vec2(1.,6.),2.))); return mix(vec3(.46,.29,.16), vec3(.58,.39,.22), .5 + .5*gr) * (.9 + .15*vnoise(vec3(p.xz*vec2(2.,30.), 4.))); }
+  if (m < 3.5){                                    // painted sky card
+    vec3 s = mix(vec3(.30,.50,.72), vec3(.95,.78,.6), smoothstep(2.6, .2, p.y));
+    s *= .94 + .1*vnoise(vec3(p.xy*vec2(1.5,8.), 5.));
+    return s*mix(.3, 1., smoothstep(5.2, 2.4, length(p.xy - vec2(.2,1.4))));
+  }
+  if (m < 4.5) return birdAlbedo(p, seam);
+  if (m < 5.5) return vec3(.98,.70,.14);
+  if (m < 6.5){ rough = .08; return vec3(.012); }
+  if (m < 7.5) return vec3(.95,.55,.2);
+  if (m < 8.5){                                    // red cap with white dots
+    vec3 q = p - (p.x < -1.05 ? MSH[0] : MSH[1]);
+    vec3 dir = normalize(q - vec3(0.,.35,0.));
+    float dots = smoothstep(.83, .87, vnoise(dir*6.2));
+    return mix(vec3(.82,.12,.08), vec3(.98,.95,.88), dots);
+  }
+  if (m < 9.5) return vec3(.96,.9,.78);
+  if (m < 10.5) return vec3(.98,.97,.93);
+  if (m < 11.5) return vec3(1.,.78,.12);
+  if (m < 12.5) return vec3(.32,.58,.22);
+  if (m < 13.5) return vec3(.55,.6,.68)*(.9 + .2*vnoise(p*14.));
+  if (m < 14.5) return vec3(.97,.96,.94);
+  if (m < 15.5) return vec3(.8,.8,.78);
+  if (m < 16.5) return vec3(1.);
+  if (m < 17.5) return vec3(.55,.42,.85);
+  return blobAlbedo(p);
+}
+vec3 shade(vec3 p, vec3 rd, float m, float t){
+  vec3 n = nrm(p, t);
+  float rough, seam;
+  vec3 a = albedo(m, p, rough, seam);
+  bool clay = (m > .5 && m < 1.5) || (m > 3.5 && m < 5.5) || (m > 6.5 && m < 13.5) || m > 16.5;
+  if (clay){
+    vec3 mp = p*46. + uFrame*.73;
+    n = normalize(n + .05*(vec3(vnoise(mp), vnoise(mp + 7.1), vnoise(mp + 13.7)) - .5));
+    a *= .94 + .12*vnoise(p*5.5);
+    a *= 1. - .35*smoothstep(.93, .97, vnoise(p*95.))*step(.5, dot(a, vec3(.33)));
+  }
+  if (m > 15.5 && m < 16.5) return vec3(1.,.78,.45)*5.;          // fairy-light bulbs
+  bool far = m > 2.5 && m < 3.5 || m > 13.5;
+  float sh = far ? .9 : shadow(p + n*.004);
+  float oc = far ? 1. : ao(p, n);
+  float ndl = dot(n, LDIR);
+  float wrap = clamp((ndl + .45)/1.45, 0., 1.);
+  vec3 key = vec3(1.,.9,.78)*2.7*uFlick;
+  vec3 col = a*key*mix(clamp(ndl, 0., 1.), wrap, .55)*sh;
+  // subsurface: warm light bleeding through the terminator of the plasticine
+  float sss = smoothstep(-.4, .1, ndl)*(1. - smoothstep(.1, .55, ndl));
+  col += a*a*vec3(1.,.5,.35)*sss*.55*(.4 + .6*sh);
+  col += a*vec3(.55,.66,.85)*.26*oc*(.55 + .45*n.y);                  // skylight from the backdrop
+  col += a*vec3(.7,.78,.95)*.32*oc*clamp(dot(n, FDIR), 0., 1.);       // cool fill
+  col += a*vec3(1.,.84,.6)*.85*oc*pow(clamp(dot(n, RDIR), 0., 1.), 2.)*(m > 3.5 ? 1. : .3);   // warm rim from the fairy lights
+  col += a*vec3(.45,.62,.3)*.18*oc*clamp(-n.y*.6 + .4, 0., 1.);       // green bounce from the meadow
+  col *= mix(.55, 1., smoothstep(0., .012, seam));                    // seams where clay pieces meet
+  // soft sheen; glossy black beads for the eyes
+  vec3 hv = normalize(LDIR - rd);
+  float gl = rough < .2 ? pow(max(dot(n, hv), 0.), 140.)*6. : pow(max(dot(n, hv), 0.), 22.)*.16;
+  col += vec3(1.,.96,.9)*gl*sh*uFlick;
+  float fr = pow(1. - max(dot(n, -rd), 0.), 4.);
+  col += vec3(.75,.82,.95)*fr*(rough < .2 ? .5 : .08)*oc;
+  if (m > 13.5 && m < 14.5) col += vec3(1.,.95,.88)*.25*max(dot(n, vec3(0.,0.,1.)), 0.);   // paper clouds glow a little
+  return col;
+}
+vec3 render(vec2 fc){
+  vec2 uv = (2.*fc - uRes)/uRes.y;
+  vec3 ro = uRo;
+  vec3 rd = camMat(ro, uTa, 0.) * normalize(vec3(uv, 3.0));
+  float t = .05; vec2 h = vec2(0.);
+  bool hit = false;
+  for (int i=0;i<150;i++){
+    h = map(ro + rd*t);
+    if (h.x < .0005*t){ hit = true; break; }
+    t += h.x*.9;
+    if (t > 14.) break;
+  }
+  if (!hit){ gDepth = 14.; return vec3(.75,.82,.88)*.6; }
+  gDepth = t;
+  return shade(ro + rd*t, rd, h.y, t);
+}`,
+});
+
+/* ---------------- animation (12 drawings per second) ---------------- */
+const HOPS = [{ t: 4.05, dx: 0.32 }, { t: 4.75, dx: 0.3 }];
+function hopY(t) {         // hop height + squash for the two hops
+  let y = 0, sq = 1;
+  for (const h of HOPS) {
+    const u = t - h.t;
+    if (u > -0.25 && u < 0) sq = Math.min(sq, 1 - 0.16 * Math.sin((u + 0.25) / 0.25 * Math.PI / 2));
+    if (u >= 0 && u < 0.42) { const v = u / 0.42; y = Math.max(y, 0.26 * 4 * v * (1 - v)); sq = Math.max(sq, 1 + 0.12 * Math.sin(v * Math.PI)); }
+    if (u >= 0.42 && u < 0.62) sq = Math.min(sq, 1 - 0.14 * Math.sin((u - 0.42) / 0.2 * Math.PI));
+  }
+  return [y, sq];
+}
+function birdX(t) { let x = -0.05; for (const h of HOPS) x += h.dx * E.inOutSine(clamp((t - h.t) / 0.42)); return x; }
+function ballState(t) {
+  // three lumps drop at 0.15 / 0.55 / 0.9, bounce once, roll together
+  const defs = [{ t0: 0.15, x: -0.42, z: 0.12, r: 0.34 }, { t0: 0.55, x: 0.36, z: 0.22, r: 0.27 }, { t0: 0.9, x: 0.02, z: -0.3, r: 0.22 }];
+  return defs.map((d, i) => {
+    const u = t - d.t0;
+    if (u < 0) return [d.x, 9, d.z, d.r];
+    let y;
+    if (u < 0.32) y = lerp(2.4, 0, E.inQuad(u / 0.32));
+    else if (u < 0.62) { const v = (u - 0.32) / 0.3; y = 0.22 * 4 * v * (1 - v); }
+    else y = 0;
+    const g = E.inOutSine(clamp((t - 1.35) / 0.8));                 // roll together
+    const x = lerp(d.x, 0.02 + (i - 1) * 0.08, g), z = lerp(d.z, 0.0, g);
+    return [x, d.r + y, z, d.r * (1 - 0.15 * g)];
+  });
+}
+function camAt(t) {
+  const u = E.inOutSine(inv(0, 10, t));
+  const p = [lerp(1.55, 1.05, u), lerp(1.0, 0.82, u), lerp(4.4, 3.55, u)];
+  const a = [lerp(0.05, 0.25, u), lerp(0.55, 0.58, u), lerp(-0.25, -0.15, u)];
+  return { p, a };
+}
+const cap = document.createElement('div'); cap.id = 'cap'; cap.innerHTML = `${C.cap}<small>${C.capEn}</small>`; stage.appendChild(cap);
+
+Reel.scene({
+  duration: 10, fps: 30,
+  fonts: ['900 64px "Noto Sans CJK SC"', '600 19px Inter'],
+  frameKey: (t) => Math.floor(t * 12 + 1e-6),
+  cues: [{ t: 0.47, sfx: 'land' }, { t: 0.87, sfx: 'land' }, { t: 1.22, sfx: 'land' }, { t: 1.5, sfx: 'suck' }, { t: 2.4, sfx: 'boing' },
+    { t: 4.05, sfx: 'pop' }, { t: 4.75, sfx: 'pop' }, { t: 5.75, sfx: 'chime' }, { t: 7.0, sfx: 'boing2' }],
+  render(tRaw) {
+    const f12 = Math.floor(tRaw * 12 + 1e-6);
+    const t = f12 / 12;
+    const jit = (k) => (Reel.hash ? 0 : 0) + (Math.sin(f12 * 12.9898 + k * 78.233) * 43758.5453 % 1) * 0.004;   // tiny hand-placement jitter
+    const balls = ballState(t);
+    const merge = E.inOutSine(clamp((t - 1.45) / 0.75));
+    const morph = E.inOutSine(clamp((t - 2.05) / 1.05));
+    const birdOn = t >= 2.05;
+    const [hy, hsq] = hopY(t);
+    const bx = birdX(t);
+    // poses
+    let headYaw = 0, headRoll = 0, beak = 0, wing = 0, eye = 1, yaw = 0.75, sq = hsq;
+    if (t > 3.15 && t < 3.3) eye = 0.12;                        // blink
+    if (t > 3.6 && t < 3.72) eye = 0.12;
+    headYaw = t < 3.4 ? 0 : (t < 3.9 ? 0.5 : (t < 5.5 ? -0.15 : 0.25));
+    if (t > 5.6 && t < 6.6) { beak = (Math.floor((t - 5.6) * 6) % 2 === 0) ? 0.9 : 0.15; headRoll = -0.12; }
+    if (t > 6.7 && t < 7.9) { wing = 0.45 + 0.45 * Math.sin((t - 6.7) * 24); sq = hsq * (1 + 0.05 * Math.sin((t - 6.7) * 24)); }
+    if (t > 8.2) { headYaw = 0.55; headRoll = 0.22 * E.outBack(clamp((t - 8.2) / 0.4)); yaw = lerp(0.75, 1.05, E.inOutSine(clamp((t - 8.2) / 0.5))); }
+    if (t > 8.95 && t < 9.1) eye = 0.12;
+    const lift = t > 6.7 && t < 7.9 ? 0.06 * Math.abs(Math.sin((t - 6.7) * 12)) : 0;
+    // squash while being kneaded
+    if (t > 1.45 && t < 2.6) sq *= 1 + 0.07 * Math.sin(f12 * 2.3);
+    const bpos = [bx + jit(1), hy + lift, 0.0 + jit(2)];
+    const ballsArr = new Float32Array(12);
+    balls.forEach((b, i) => ballsArr.set([b[0] + jit(i + 3), b[1], b[2], b[3]], i * 4));
+    // music note floats up while chirping
+    const nu = clamp((t - 5.75) / 1.6);
+    const note = t > 5.75 && t < 7.35 ? [bx + 0.45 + 0.12 * nu, 1.25 + nu * 0.7, 0.05, 0.75 * E.outBack(clamp(nu * 4)) * (1 - E.inQuad(clamp((nu - 0.75) / 0.25)))] : [0, -5, 0, 0];
+    const cam = camAt(t);
+    const flick = 1 + (((Math.sin(f12 * 91.7) * 43758.5) % 1 + 1) % 1 - 0.5) * 0.035;   // stop-motion exposure flicker
+    rm.set('uBirdP', [...bpos, yaw]).set('uBirdA', [sq, headYaw, headRoll, beak]).set('uBirdB', [wing, eye, birdOn ? morph : 0, birdOn ? 1 : 0])
+      .set('uBalls', ballsArr).set('uMerge', merge).set('uNote', note)
+      .set('uRo', cam.p).set('uTa', cam.a).set('uFrame', f12 % 64).set('uFlick', flick);
+    const fd = Math.hypot(cam.p[0] - bx, cam.p[1] - 0.55, cam.p[2]);
+    rm.render(t, { focus: fd, aperture: 120, maxCoc: 22 });
+    const ca = E.outCubic(inv(8.4, 9.0, t));
+    cap.style.opacity = ca; cap.style.transform = `translateY(${(1 - ca) * -14}px)`;
+  },
+});
+</script></body></html>

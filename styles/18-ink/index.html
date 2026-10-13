@@ -1,0 +1,453 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>18 水墨国风 · Ink Wash</title>
+<script src="../../lib/core.js"></script><script src="../../lib/gl.js"></script>
+</head><body><div id="stage"></div>
+<script>
+/* ===== 18 水墨国风 · INK WASH =====
+   One drop of ink falls on xuan paper and blooms into distant mountains. Nearer ranges are brushed in,
+   a cliff and an old pine, a river, a boat. Then the camera glides into the painting: every range is
+   its own depth plane, so the mist and mountains part like a real landscape. A poem is brushed in and
+   the red seal 肖雄 is stamped. Everything is one fragment shader (ink density, bleeding edges,
+   cun strokes, dry brush, xuan paper fibres) + a 2D canvas for the calligraphy and seal. */
+const { E, clamp, inv, lerp } = Reel;
+const stage = Reel.makeStage('#f3efe6');
+Reel.ownJitter = true;
+const C = Reel.cfg({ poem: '山河入画', poem2: '一笔一山河', seal: '肖雄' });
+const RS = Reel.RS;
+const W = Math.round(1920 * RS), H = Math.round(1080 * RS);
+const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+cv.style.cssText = 'position:absolute;left:0;top:0;width:1920px;height:1080px';
+stage.appendChild(cv);
+const G = Reel.GL(cv);
+const gl = G.gl;
+// calligraphy + seal canvas (design space 1920x1080 scaled to W x H)
+const tc = document.createElement('canvas'); tc.width = W; tc.height = H;
+const tx = tc.getContext('2d');
+const txTex = gl.createTexture();
+gl.bindTexture(gl.TEXTURE_2D, txTex);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+const FS = `#version 300 es
+precision highp float; precision highp int;
+in vec2 uv; out vec4 o;
+uniform vec2 uRes, uJit; uniform float uT;
+uniform vec3 uCam;
+uniform sampler2D uTxt;
+uniform vec4 uRevA;            // reveal: far, far2, mid, near
+uniform vec4 uRevB;            // cliff, pine, water, boat
+uniform vec4 uBlot;            // impact x, y (design px), radius, blot ink
+uniform vec3 uDrop;            // drop x, y, on
+uniform vec3 uBoat;            // world x, z, bob
+uniform float uSeed;
+float hash11(float p){ p=fract(p*.1031); p*=p+33.33; p*=p+p; return fract(p); }
+float hash12(vec2 p){ vec3 p3=fract(vec3(p.xyx)*.1031); p3+=dot(p3,p3.yzx+33.33); return fract((p3.x+p3.y)*p3.z); }
+float vn(vec2 p){ vec2 i=floor(p), f=fract(p); f=f*f*(3.-2.*f);
+  return mix(mix(hash12(i),hash12(i+vec2(1,0)),f.x), mix(hash12(i+vec2(0,1)),hash12(i+vec2(1,1)),f.x), f.y); }
+float fbm(vec2 p){ float a=.5, s=0.; for(int i=0;i<5;i++){ s+=a*vn(p); p=mat2(1.6,1.2,-1.2,1.6)*p+vec2(1.7,9.2); a*=.5; } return s/.97; }
+float fbm3o(vec2 p){ float a=.5, s=0.; for(int i=0;i<3;i++){ s+=a*vn(p); p=mat2(1.6,1.2,-1.2,1.6)*p+vec2(1.7,9.2); a*=.5; } return s/.875; }
+float n1(float x){ return vn(vec2(x, 3.7)); }
+const float F = 1100.;
+// ---------- mountain silhouettes (world units; y up, water at y = 0) ----------
+// art-directed peaks per range: (x, height, width, falloff)
+const vec4 PK0[4] = vec4[4](vec4(-15., 6.5, 5., 1.1), vec4(-6., 8.5, 4.2, 1.2), vec4(14., 12., 5., 1.25), vec4(27., 8., 5., 1.1));
+const vec4 PK1[4] = vec4[4](vec4(-11., 4.6, 3.6, 1.15), vec4(6.5, 7.6, 3.2, 1.3), vec4(12., 9.6, 3.6, 1.35), vec4(22., 5.2, 3.5, 1.2));
+const vec4 PK2[5] = vec4[5](vec4(-3.9, 11.2, 3.1, 1.3), vec4(-1.9, 8.6, 1.7, 1.5), vec4(-6.2, 7.2, 1.9, 1.4), vec4(-.2, 5.6, 1.6, 1.4), vec4(-8.4, 3.8, 1.8, 1.3));
+const vec4 PK3[4] = vec4[4](vec4(4.2, 2.8, 1.4, 1.3), vec4(6., 3.5, 1.1, 1.4), vec4(7.8, 2.2, 1.3, 1.3), vec4(-1.2, 1.4, 1.5, 1.2));
+float pk(float x, vec4 p){ float u = (x - p.x)/p.z; return p.y*pow(1. + u*u, -p.w*1.6); }
+float rough(float x, float h, float sd){
+  float r = 0., a = .5, f = .45;
+  for (int i=0;i<4;i++){ r += a*(1. - abs(vn(vec2(x*f, sd))*2. - 1.)); f *= 2.2; a *= .5; }
+  return (r - .55)*(.25 + h*.09);
+}
+float bumps(float x, float cell, float hmax, float sd){
+  float c = floor(x/cell), h = 0.;
+  for (int k=-1;k<=1;k++){ float ci = c + float(k); float px = (ci + .5 + (hash11(ci*1.7 + sd) - .5)*.6)*cell; float u = (x - px)/(cell*.45); h = max(h, hmax*hash11(ci*3.3 + sd)*pow(1. + u*u, -1.5)); }
+  return h;
+}
+float ridgeH(int L, float x){
+  float h = 0.;
+  if (L == 0){ for (int i=0;i<4;i++) h = max(h, pk(x, PK0[i])); h = max(h, bumps(x, 5., 3.5, 3.) + .6); return h + rough(x, h, 1.); }
+  if (L == 1){ for (int i=0;i<4;i++) h = max(h, pk(x, PK1[i])); h = max(h, bumps(x, 3.6, 2.6, 9.) + .4); return h + rough(x, h, 2.); }
+  if (L == 2){ for (int i=0;i<5;i++) h = max(h, pk(x, PK2[i])); h = max(h, bumps(x, 2.6, 1.6, 17.) + .2); return h + rough(x, h, 3.); }
+  if (L == 3){ for (int i=0;i<4;i++) h = max(h, pk(x, PK3[i])); return h + rough(x, h, 4.)*.8 - .1; }
+  // near cliff, bottom left
+  float c = 3.1*pow(1. + pow(max(x + 4.4, 0.)/.9, 2.), -1.25) * smoothstep(-12., -10., x) + .5*smoothstep(-2.6, -4.6, x);
+  return c + rough(x, c, 5.)*1.1;
+}
+// inner structure: contour of each sub-peak inside the mass
+float innerLines(int L, float x, float y, float env, float d){
+  if (L != 2 && L != 1) return 0.;
+  float l = 0., w = d/F*2.2;
+  for (int i=0;i<5;i++){
+    if (L == 1 && i > 3) break;
+    vec4 p = L == 2 ? PK2[i] : PK1[i];
+    float hk = pk(x, p) + rough(x, pk(x, p), float(i)*3.7 + 11.);
+    if (hk < env - w*2.){
+      float ln = exp(-abs(y - hk)/w) * smoothstep(hk - p.y*.35, hk, y + p.y*.02);
+      l = max(l, ln*smoothstep(.3, .6, vn(vec2(x*3., float(i)))));
+    }
+  }
+  return l;
+}
+const float LZ[5] = float[5](70., 44., 27., 16., 8.5);
+const float LINK[5] = float[5](.2, .3, .52, .72, .95);
+vec3 paper(vec2 dc){
+  vec3 c = vec3(.957,.943,.91);
+  c *= 1. - .03*smoothstep(.35, .9, fbm(dc*.0022 + 7.));
+  vec2 r1 = mat2(.8,.6,-.6,.8)*dc, r2 = mat2(.5,-.87,.87,.5)*dc;
+  float fb = smoothstep(.86, .95, vn(r1*vec2(.008,.9))) + smoothstep(.88, .96, vn(r2*vec2(.007,.85) + 5.));
+  c *= 1. - .012*fb;
+  c *= 1. - .018*(vn(dc*.45) - .5);
+  return c;
+}
+float layerInk(int L, vec2 dc, float pxw, out float hp, out float wy){
+  float d = LZ[L] - uCam.z;
+  float x = uCam.x + (dc.x - 960.)*d/F, y = uCam.y + (dc.y - 540.)*d/F;
+  wy = y;
+  float h = ridgeH(L, x);
+  hp = 0.;
+  float bw = pxw*d*(1. + 2.2*vn(dc*.07 + float(L)*7.));
+  float inside = smoothstep(h + bw, h - bw, y);
+  if (inside <= 0.) return 0.;
+  hp = (ridgeH(L, x + .05*d/8.) - h)*2.;
+  float dy = max(h - y, 0.);
+  float sc = d/F;                                                     // world units per design px
+  float rim = exp(-dy/(sc*7.)) * (.55 + .45*smoothstep(.3, .6, vn(vec2(x/sc*.05, 1.) + float(L))));
+  float body = exp(-dy/max(h*.55, .5));                               // denser near the summits
+  float fade = smoothstep(.1, mix(1.6, 4.6, float(L)/3.)*(L == 4 ? .5 : 1.), y);
+  // hemp-fibre strokes: long wavy lines running down the slopes
+  float s1 = x/sc*.045 + sin(y/sc*.006 + x*.7)*.8 + (vn(vec2(x/sc*.01, y/sc*.004))-.5)*2.;
+  float hemp = smoothstep(.16, .02, abs(fract(s1) - .5)) * smoothstep(.35, .7, vn(vec2(floor(s1)*1.7, y/sc*.012))) * body;
+  float mott = fbm3o(vec2(x, y)/sc*.004 + float(L)*13.1);
+  float dry = smoothstep(.6, .82, fbm3o(vec2(x/sc*.02, y/sc*.0045) + float(L)*5.3));
+  float side = smoothstep(-.1, .2, hp);
+  float k = (.22 + .5*mott*body + .25*side*body) * (1. - .6*dry);
+  k = max(k, hemp*.75);
+  k += innerLines(L, x, y, h, d)*.6;
+  k = max(k, rim*.95);
+  if (L == 4){
+    float mo = fbm(vec2(x, y)/sc*.006 + 3.);
+    float crack = smoothstep(.03, .0, abs(fbm(vec2(x, y)/sc*.004 + 11.) - .5)) * smoothstep(.35, .7, vn(vec2(x, y)/sc*.01));
+    vec2 ap = mat2(.74,-.67,.67,.74)*vec2(x, y)/sc;
+    float axe = smoothstep(.6, .72, fbm(vec2(ap.x*.006, ap.y*.035) + 5.)) * (.45 + .55*smoothstep(.3, .7, fract(ap.x*.004 + vn(vec2(ap.y*.01, 2.)))));
+    float nearTop = exp(-dy/(sc*90.));
+    k = max(rim*.95, .1 + .18*mo + .6*axe*(.35 + .65*nearTop));
+    k = max(k, crack*.75);
+  }
+  // waist mist across the big mountain
+  if (L == 2) k *= 1. - .85*exp(-pow((y - 5.2 - (fbm(vec2(x*.25 - uT*.04, 3.))-.5)*1.6)/1.1, 2.));
+  if (L == 1) k *= 1. - .7*exp(-pow((y - 3.6 - (fbm(vec2(x*.2 - uT*.03, 5.))-.5)*1.2)/1., 2.));
+  return inside * clamp(k, 0., 1.) * fade;
+}
+float sdSeg(vec2 p, vec2 a, vec2 b){ vec2 pa=p-a, ba=b-a; float h=clamp(dot(pa,ba)/dot(ba,ba),0.,1.); return length(pa-ba*h); }
+// world -> design px for the cliff plane
+vec2 toScr(vec3 w){ float d = w.z - uCam.z; return vec2(960. + (w.x - uCam.x)*F/d, 540. + (w.y - uCam.y)*F/d); }
+void main(){
+  vec2 fc = gl_FragCoord.xy + uJit;
+  vec2 dc = fc*(1920./uRes.x);
+  float pxw = 1./F;                       // world units per design px at unit depth
+  vec3 pap = paper(dc);
+  vec3 col = pap;
+  vec3 ink = vec3(.10,.095,.09);
+  // ---- sky wash + red sun ----
+  float skyW = smoothstep(560., 1080., dc.y)*.06*smoothstep(0., .6, uRevA.x);
+  col = mix(col, vec3(.55,.56,.6), skyW);
+  vec2 sunP = vec2(1190., 850.);
+  float sr = length(dc - sunP) + (vn(dc*.05)-.5)*6.;
+  float sun = smoothstep(62., 54., sr) * smoothstep(2.2, 3.4, uT);
+  col = mix(col, vec3(.86,.36,.26), sun*.55*(.85 + .15*vn(dc*.22)));
+  col = mix(col, vec3(.9,.55,.45), smoothstep(110., 50., sr)*.08*smoothstep(2.2, 3.4, uT));
+  // ---- the ink drop and its bloom ----
+  float blotR = uBlot.z, bd = length(dc - uBlot.xy);
+  float ang = atan(dc.y - uBlot.y, dc.x - uBlot.x);
+  float edgeN = fbm(vec2(ang*2.4, 1.3))*.18 + fbm(dc*.02)*.08;
+  float bR = blotR*(.88 + edgeN);
+  float fib = vn(vec2(ang*95., bd*.035)) * .5 + vn(vec2(ang*40., bd*.02) + 4.)*.5;     // capillary fibres
+  float feather = 18. + 26.*fib;
+  float bloom = smoothstep(bR + feather*.3, bR - feather, bd + (fib - .5)*22.) * (.35 + .65*pow(smoothstep(bR, 0., bd), .7));
+  float bring = exp(-pow((bd - bR + 8.)/6., 2.))*(.5 + .5*fib);
+  // ---- mountain layers, far to near ----
+  for (int L=0; L<4; L++){
+    float hp, wy;
+    float k = layerInk(L, dc, pxw, hp, wy);
+    float rv = L == 0 ? uRevA.x : (L == 1 ? uRevA.y : (L == 2 ? uRevA.z : uRevA.w));
+    float m = L < 3 ? bloom*smoothstep(0., .4, rv) : 1. - smoothstep(rv*2400. - 200., rv*2400., dc.x + (fbm(dc*.01)-.5)*260.);
+    if (L < 3) m = max(m, smoothstep(.6, 1., rv));
+    k *= m;
+    col = mix(col, mix(col, ink, .9), k*LINK[L]);
+    // moss dots on the nearer ridges
+    if (L >= 2){
+      float d = LZ[L] - uCam.z;
+      float x = uCam.x + (dc.x - 960.)*d/F;
+      float cell = L == 2 ? .55 : .4;
+      float ci = floor(x/cell);
+      for (int j=-1;j<=1;j++){
+        float cj = ci + float(j);
+        if (hash11(cj*2.3 + float(L)) < .62) continue;
+        float xk = (cj + .5 + (hash11(cj*4.1)-.5)*.6)*cell;
+        float hk = ridgeH(L, xk);
+        if (hk < (L == 2 ? 4.5 : 1.8)) continue;
+        vec2 sk = vec2(960. + (xk - uCam.x)*F/d, 540. + (hk - .05 - uCam.y)*F/d);
+        float rk = (L == 2 ? 3.2 : 4.6)*(.7 + .6*hash11(cj*9.7));
+        float dd = length((dc - sk)*vec2(1., 1.3)) + (vn(dc*.3)-.5)*1.5;
+        col = mix(col, ink, smoothstep(rk, rk - 1.6, dd)*.85*m*smoothstep(.5, 1., rv));
+      }
+    }
+    // mist rising between ranges
+    float d = LZ[L] - uCam.z;
+    float wl = 540. + (0. - uCam.y)*F/d;                                // this range's waterline on screen
+    float mb = exp(-pow((dc.y - wl - 40.*F/d)/(90.*clamp(14./d, .5, 1.6)), 2.));
+    float mist = mb * smoothstep(.35, .75, fbm(vec2(dc.x*.0022 - uT*.035*(1. + float(L)*.3), dc.y*.006 + float(L)*3.)));
+    col = mix(col, pap, mist*.85*smoothstep(0., .5, uRevA.x));
+  }
+  // ---- river: reflections + ripple strokes ----
+  float wl3 = 540. + (0. - uCam.y)*F/(LZ[3] - uCam.z);
+  if (dc.y < wl3){
+    float dist = uCam.y*F/max(540. - dc.y, 1.);                        // distance to the water plane
+    float wx = uCam.x + (dc.x - 960.)*dist/F, wz = uCam.z + dist;
+    // faint reflection of the near range (mirror about its waterline), broken by ripples
+    float hp, wy;
+    vec2 rp = vec2(dc.x + (vn(vec2(dc.y*.08, uT*.6))-.5)*14., 2.*wl3 - dc.y);
+    float rk = layerInk(3, rp, pxw, hp, wy)*smoothstep(0., 1., uRevB.z);
+    col = mix(col, ink, rk*.16*smoothstep(wl3 - 260., wl3, dc.y));
+    // sparse, thin ripple strokes on perspective rows
+    float row = floor(wz*1.15);
+    float zr = (row + .5)/1.15;
+    float yr = 540. - uCam.y*F/max(zr - uCam.z, .5) + sin(wx*1.3 + row*2.1 + uT*.8)*1.2;
+    float seg = vn(vec2(dc.x*.007 + row*7.3, row));
+    float on = smoothstep(.66, .74, seg) * step(.45, hash11(row*3.7));
+    float rpl = smoothstep(1.5, .3, abs(dc.y - yr)) * on * smoothstep(.66, .8, seg);
+    col = mix(col, ink, rpl*.42*smoothstep(0., 1., uRevB.z)*smoothstep(42., 8., dist));
+  }
+  // ---- the boat with a fisherman ----
+  if (uRevB.w > 0.){
+    float d = uBoat.y - uCam.z;
+    vec2 bp = vec2(960. + (uBoat.x - uCam.x)*F/d, 540. + (uBoat.z*0. + .0 - uCam.y)*F/d);
+    float s = F/d;                                                    // px per world unit
+    vec2 q = (dc - bp)/s; q.y -= uBoat.z;
+    float hy = .11*q.x*q.x - .02;                                    // crescent hull as one brush stroke
+    float th = .085*(1. - smoothstep(.5, 1.1, abs(q.x)));
+    float hull = max(abs(q.y - hy - th*.4) - th, abs(q.x) - 1.1);
+    float cape = length((q - vec2(.12,.2))*vec2(1.25,.9)) - .17;
+    float hat = max(abs(q.x - .1)*.42 + (q.y - .5), -(q.y - .4));
+    vec2 rq = q - vec2(.25,.32);
+    float rod = abs(rq.y - .45*rq.x + .06*rq.x*rq.x) - .01; rod = max(rod, max(-rq.x, rq.x - 1.3));
+    float line = sdSeg(q, vec2(1.55,.87), vec2(1.58,-.05)) - .004;
+    float bdist = min(min(hull, cape), min(hat, min(rod, line)))*s;
+    float drybr = smoothstep(.55, .8, vn(vec2(q.x*6., q.y*40.)))*step(hull, min(cape, hat));
+    float bk = smoothstep(1.1, -.6, bdist + (vn(dc*.4)-.5)*.9)*uRevB.w*(1. - .5*drybr);
+    col = mix(col, ink, bk*.9);
+    // its reflection, broken by ripples
+    vec2 rq2 = vec2(dc.x + (vn(vec2(dc.y*.2, uT*2.))-.5)*5., 2.*bp.y - dc.y);
+    vec2 q2 = (rq2 - bp)/s;
+    float hull2 = max(abs(q2.y - .11*q2.x*q2.x + .02 - .03) - .07, abs(q2.x) - 1.1);
+    float refl = smoothstep(1., -1., min(hull2, length((q2 - vec2(.12,.2))*vec2(1.25,.9)) - .17)*s) * step(dc.y, bp.y);
+    col = mix(col, ink, refl*.22*uRevB.w*smoothstep(.3, .6, vn(vec2(dc.x*.05, dc.y*.6))));
+    // wake
+    float wk = smoothstep(2.2, .8, abs((dc.y - bp.y + 3.) - sin((dc.x - bp.x)*.12)*1.5))*smoothstep(-260., -60., dc.x - bp.x)*smoothstep(10., -40., dc.x - bp.x);
+    col = mix(col, ink, wk*.3*uRevB.w*smoothstep(.3, .7, vn(vec2(dc.x*.05, 1.))));
+  }
+  // ---- near cliff with an old pine ----
+  {
+    float hp, wy;
+    float k = layerInk(4, dc, pxw, hp, wy);
+    float m = 1. - smoothstep(uRevB.x*1800. - 240., uRevB.x*1800., dc.y*.9 + dc.x*.55 + (fbm(dc*.012)-.5)*300.);
+    col = mix(col, mix(col, ink, .95), k*LINK[4]*m);
+    // the pine: trunk + needle pads, drawn in the cliff's depth plane
+    float d = LZ[4] - uCam.z, s = F/d;
+    vec2 q = (dc - vec2(960. + (-4.55 - uCam.x)*s, 540. + (3.05 - uCam.y)*s))/s;   // root of the pine, world units
+    float pr = uRevB.y;
+    float tr = 1e3;
+    vec2 P0 = vec2(0.,0.), P1 = vec2(.8,.55), P2 = vec2(2.,.8), P3 = vec2(3.3,.62), P4 = vec2(4.4,.98);
+    float wtr = .15*(.85 + .3*vn(vec2(q.x*2.2, 1.)));
+    tr = min(tr, sdSeg(q, P0, P1) - wtr);
+    tr = min(tr, sdSeg(q, P1, P2) - wtr*.8);
+    tr = min(tr, sdSeg(q, P2, P3) - wtr*.6);
+    tr = min(tr, sdSeg(q, P3, P4) - wtr*.42);
+    tr = min(tr, sdSeg(q, P1 + vec2(.15,.05), vec2(1.25,1.45)) - .07);
+    tr = min(tr, sdSeg(q, P2, vec2(2.65,1.55)) - .06);
+    tr = min(tr, sdSeg(q, P3, vec2(3.5,.95)) - .04);
+    float along = clamp(q.x/4.6, 0., 1.);
+    float grow = step(along, pr*1.15) * step(.001, pr);
+    // trunk: dark broken contour, pale mottled wash inside, a few bark scales
+    float cont = smoothstep(-.05, -.012, tr) * smoothstep(.02, -.01, tr) * smoothstep(.25, .55, vn(q*vec2(6., 2.)));
+    float fill = smoothstep(.02, -.02, tr + (vn(q*9.)-.5)*.05);
+    float grain = smoothstep(.45, .75, vn(q*vec2(2.4, 26.)));        // dry brush along the grain
+    float knot = smoothstep(.65, .8, vn(q*3.1 + 4.));
+    col = mix(col, ink, grow*fill*(.32 + .3*grain + .25*knot));
+    col = mix(col, ink, grow*cont*.8);
+    // needles: fans of fine strokes radiating from little knots, layered into flat pads
+    vec4 pads[6] = vec4[6](vec4(1.25,1.5,.85,.26), vec4(2.65,1.62,1.,.3), vec4(3.45,.98,.85,.25), vec4(4.5,1.1,.75,.22), vec4(.62,.92,.55,.2), vec4(1.95,1.04,.7,.22));
+    float px1 = 1./s;
+    for (int i=0;i<6;i++){
+      vec4 pd = pads[i];
+      if (abs(q.x - pd.x) > pd.z + .45 || abs(q.y - pd.y) > pd.w + .45) continue;
+      float ap = smoothstep(.15*float(i)/6., .15*float(i)/6. + .2, pr - .6);
+      vec2 rr = (q - pd.xy)/vec2(pd.z, pd.w);
+      float wsh = smoothstep(1., .55, length(rr) + (vn(rr*3. + float(i))-.5)*.35);
+      col = mix(col, ink, wsh*.16*ap*(.5 + .5*smoothstep(-.6, .6, rr.y)));
+      for (int j=0;j<5;j++){
+        float fj = float(j), hs = hash11(fj*3.1 + float(i)*7.);
+        vec2 fcn = pd.xy + vec2((fj/4. - .5)*pd.z*1.5, (hs - .5)*pd.w*.5 - pd.w*.2);
+        vec2 r = q - fcn;
+        float rl = length(r);
+        float Lf = .3 + .08*hash11(fj + float(i)*13.);
+        if (rl > Lf*1.1) continue;
+        float a = atan(r.y, r.x);
+        float a0 = .18 + (hs - .5)*.3, a1 = 3.14159 - .18 + (hs - .5)*.3;
+        if (a < a0 - .05 || a > a1 + .05) continue;
+        float stp = .105;
+        float kf = floor((a - a0)/stp);
+        float ak = a0 + (kf + .5 + (hash11(kf*1.7 + fj*5. + float(i)) - .5)*.45)*stp;
+        float Lk = Lf*(.72 + .38*hash11(kf*2.3 + fj + float(i)*3.));
+        float dA = abs(a - ak)*rl;
+        float needle = smoothstep(px1*1.25, px1*.25, dA) * smoothstep(Lk, Lk*.82, rl);
+        float knot = smoothstep(px1*3.2, px1*1.2, rl);
+        col = mix(col, ink, max(needle*(.8 - .35*rl/Lk), knot*.9)*ap);
+      }
+    }
+  }
+  // ---- falling drop ----
+  if (uDrop.z > 0.){
+    vec2 q = dc - uDrop.xy;
+    q.y = q.y > 0. ? q.y*.55 : q.y;
+    float dd = length(q*vec2(1., .7)) - 16.;
+    col = mix(col, ink, smoothstep(1., -1., dd)*uDrop.z);
+  }
+  // the blot itself (dense ink that settles back into the mountains)
+  col = mix(col, ink, bloom*uBlot.w*(.7 + .3*fbm(dc*.025)));
+  col = mix(col, ink, bring*.22*smoothstep(.08, .35, uBlot.w));
+  // ---- birds ----
+  for (int i=0;i<5;i++){
+    float fi = float(i);
+    float bt = uT - 3.6 - fi*.12;
+    if (bt < 0.) continue;
+    vec2 bp = vec2(-80. + bt*150. + fi*38. - (fi > 2. ? 60. : 0.), 760. + fi*16. + sin(bt*.9 + fi)*8. - (fi > 2. ? 30. : 0.));
+    vec2 q = dc - bp;
+    float fl = sin(bt*9. + fi*1.7);
+    float wing = min(sdSeg(q, vec2(-9., 3. + 4.*fl), vec2(0.,0.)), sdSeg(q, vec2(0.,0.), vec2(9., 3. + 4.*fl)));
+    col = mix(col, ink, smoothstep(1.6, .4, wing)*.85);
+  }
+  // ---- calligraphy + seal (2D canvas), with bleeding ink ----
+  vec2 tuv = (fc + (vec2(vn(dc*.08), vn(dc*.08 + 3.)) - .5)*1.6*(uRes.x/1920.))/uRes;
+  vec4 tt = texture(uTxt, tuv);
+  vec2 o6 = 6./uRes;
+  vec2 g = vec2(texture(uTxt, tuv + vec2(o6.x,0.)).a - texture(uTxt, tuv - vec2(o6.x,0.)).a, texture(uTxt, tuv + vec2(0.,o6.y)).a - texture(uTxt, tuv - vec2(0.,o6.y)).a);
+  vec2 tdir = length(g) > .02 ? normalize(vec2(-g.y, g.x)) : vec2(0.,1.);
+  vec2 sp = vec2(dot(dc, tdir), dot(dc, vec2(-tdir.y, tdir.x)));
+  float streak = vn(vec2(sp.x*.018, sp.y*.7));
+  float edge = smoothstep(.0, .5, length(g));
+  float halo = texture(uTxt, tuv + vec2(1.5, -1.)/uRes).a*.25 + texture(uTxt, tuv - vec2(1.,1.5)/uRes).a*.25;
+  vec3 tcol = tt.rgb;
+  float ta = tt.a;
+  bool red = tcol.r > tcol.g + .2;
+  if (red) ta *= .8 + .2*smoothstep(.35, .6, vn(dc*.5)) - .3*smoothstep(.7, .86, vn(dc*.13 + 9.));
+  else { ta *= 1. - .6*smoothstep(.6, .82, streak)*(.35 + .65*edge); ta = max(ta, halo*.3); }
+  col = mix(col, red ? vec3(.78,.18,.13) : ink, clamp(ta, 0., 1.));
+  // paper grain over everything + gentle vignette
+  col *= 1. - .03*(vn(dc*.9) - .5);
+  col *= 1. - .07*smoothstep(.6, 1.35, length((dc - vec2(960.,540.))/vec2(960.,540.)));
+  col += (hash12(fc + uSeed) - .5)/255.;
+  o = vec4(clamp(col, 0., 1.), 1.);
+}`;
+const prog = G.program(FS);
+
+/* ---------------- calligraphy + seal ---------------- */
+const KX = W / 1920;
+const fontPoem = `900 ${(112 * KX).toFixed(1)}px "Noto Serif CJK SC"`;
+const fontPoem2 = `500 ${(40 * KX).toFixed(1)}px "Noto Serif CJK SC"`;
+const fontSeal = `900 ${(40 * KX).toFixed(1)}px "Noto Serif CJK SC"`;
+function brushChar(ch, x, y, size, prog, font) {
+  // reveal a vertical-written character top-down with a ragged, brushy front
+  if (prog <= 0) return;
+  tx.save();
+  tx.font = font; tx.textAlign = 'center'; tx.textBaseline = 'middle';
+  tx.beginPath();
+  const top = y - size * 0.6, hgt = size * 1.2;
+  const front = top + hgt * Math.min(1, prog);
+  tx.moveTo(x - size, top);
+  for (let i = 0; i <= 12; i++) {
+    const xx = x - size + i / 12 * size * 2;
+    tx.lineTo(xx, front + Math.sin(i * 1.7 + ch.charCodeAt(0)) * size * 0.06 * (prog < 1 ? 1 : 0));
+  }
+  tx.lineTo(x + size, top);
+  tx.closePath(); tx.clip();
+  tx.fillStyle = 'rgba(18,17,16,1)';
+  tx.fillText(ch, x, y);
+  tx.restore();
+}
+function drawText(t) {
+  tx.clearRect(0, 0, W, H);
+  // poem: right side, vertical, written top-down; small second column to its left
+  const chars = [...C.poem];
+  chars.forEach((ch, i) => {
+    const t0 = 5.7 + i * 0.36;
+    brushChar(ch, 1712 * KX, (150 + i * 122) * KX, 112 * KX, E.inOutSine(inv(t0, t0 + 0.34, t)), fontPoem);
+  });
+  const c2 = [...C.poem2];
+  c2.forEach((ch, i) => {
+    const t0 = 7.3 + i * 0.1;
+    brushChar(ch, 1590 * KX, (200 + i * 48) * KX, 40 * KX, E.outQuad(inv(t0, t0 + 0.14, t)), fontPoem2);
+  });
+  // seal 肖雄: carved (white) characters on vermilion, stamped with a press
+  const ts = 8.15;
+  if (t > ts) {
+    const u = clamp((t - ts) / 0.22);
+    const sc = 1 + 0.35 * Math.pow(1 - u, 3);
+    const a = E.outQuad(u);
+    const sx = 1592 * KX, sy = 520 * KX, sz = 84 * KX;
+    tx.save(); tx.translate(sx, sy); tx.rotate(-0.03); tx.scale(sc, sc);
+    tx.globalAlpha = a;
+    tx.fillStyle = 'rgb(200,46,36)';
+    const r = 6 * KX;
+    tx.beginPath(); tx.roundRect(-sz / 2, -sz / 2, sz, sz, r); tx.fill();
+    tx.globalCompositeOperation = 'destination-out';
+    tx.font = fontSeal; tx.textAlign = 'center'; tx.textBaseline = 'middle';
+    const s = [...C.seal];
+    tx.fillText(s[0], 0, -sz * 0.22); tx.fillText(s[1] || '', 0, sz * 0.24);
+    tx.globalCompositeOperation = 'source-over';
+    tx.restore();
+  }
+}
+
+/* ---------------- timeline ---------------- */
+function camAt(t) {
+  const u = E.inOutSine(inv(2.6, 10.6, t));
+  return [lerp(0, 1.5, u), lerp(3.0, 2.8, u), lerp(0, 3.1, u)];
+}
+Reel.scene({
+  duration: 10, fps: 30,
+  fonts: [fontPoem, fontPoem2, fontSeal],
+  cues: [{ t: 0.42, sfx: 'pop' }, { t: 0.5, sfx: 'swell' }, { t: 2.0, sfx: 'whoosh' }, { t: 5.7, sfx: 'scribble' }, { t: 8.15, sfx: 'impact_soft' }],
+  render(t) {
+    const cam = camAt(t);
+    // ink drop: falls 0.12-0.45, hits at (900, 640)
+    const hitT = 0.45, hit = [900, 640];
+    const dropOn = t >= 0.12 && t < hitT ? 1 : 0;
+    const dy = lerp(1180, hit[1], E.inQuad(clamp((t - 0.12) / (hitT - 0.12))));
+    const age = Math.max(0, t - hitT);
+    const blotR = t < hitT ? 0 : 1250 * (1 - Math.exp(-age * 1.35)) + 25 * age;
+    const blotInk = t < hitT ? 0 : 0.92 * Math.exp(-age * 2.2) * clamp(age / 0.05);
+    const rv = (a, b) => E.outCubic(inv(a, b, t));
+    drawText(t);
+    gl.bindTexture(gl.TEXTURE_2D, txTex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, tc);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    const jit = Reel.jit || [0, 0];
+    prog.use().set('uRes', [W, H]).set('uJit', [jit[0], -jit[1]]).set('uT', t).set('uCam', cam)
+      .set('uTxt', { tex: txTex, unit: 0 })
+      .set('uRevA', [rv(0.6, 2.2), rv(0.8, 2.4), rv(1.05, 2.6), rv(1.5, 3.0)])
+      .set('uRevB', [rv(1.9, 3.3), rv(2.6, 4.2), rv(2.8, 4.0), rv(3.2, 3.8)])
+      .set('uBlot', [hit[0], hit[1], blotR, blotInk])
+      .set('uDrop', [hit[0], dy, dropOn])
+      .set('uBoat', [lerp(-2.4, 1.2, clamp((t - 3.2) / 6.8)), 15.2, 0.03 * Math.sin(t * 2.2)])
+      .set('uSeed', Math.floor(t * 30) * 7.13 % 101);
+    gl.enable(gl.SCISSOR_TEST);
+    const bands = 8, bh = Math.ceil(H / bands);
+    for (let b = 0; b < bands; b++) { gl.scissor(0, b * bh, W, bh); prog.draw(null); gl.finish(); }
+    gl.disable(gl.SCISSOR_TEST);
+  },
+});
+</script></body></html>

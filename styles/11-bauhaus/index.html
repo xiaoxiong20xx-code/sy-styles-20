@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>11 几何构成 · 包豪斯</title>
+<script src="../../lib/core.js"></script>
+<script src="../../lib/gl.js"></script>
+<script src="../../lib/rm.js"></script>
+</head><body><div id="stage"></div>
+<script>
+/* ===== 11 几何构成 · 包豪斯 · ANAMORPHIC BAUHAUS =====
+   Twenty painted plywood plates float in a paper-white studio at different depths. Seen from the side they
+   are an abstract hanging sculpture; they flip in on the beat while the camera orbits, and at one single
+   viewpoint every fragment lines up into a flat Bauhaus poster (split circle, split bars, ring, letters).
+   Plates are traced analytically (ray/slab + 2D SDF), with area-light soft shadows, plywood edges, a
+   softbox sheen and depth of field that stops down at the moment of alignment. */
+const { E, clamp, lerp, inv } = Reel;
+const stage = Reel.makeStage('#e9e2d4');
+const C = Reel.cfg({ tag: '形式追随功能', no: 'NO.11', sub: 'BAUHAUS · 1919—2026', credit: '肖雄 XIAOXIONG' });
+const B = 0.5;                                  // one beat at 120 BPM
+const FIN = 6.5;                                // the moment of alignment (beat 13)
+const F0 = 2.0, CZ = 7.2;                       // final focal length, final camera z
+
+// ---- the poster, designed in final-view screen space (uv: y up, |y|<=1) ----
+// type: 0 rect(hx,hy,ang) 1 half-disc(r,side 0:+x 1:-x 2:+y) 2 disc(r) 3 tri(r) 4 ring(r,w) 5 quarter(r) 6 dots(step,r) 7 F 8 O 9 R 10 M
+// [cx, cy, depth, type, p0, p1, p2, colour(0 red 1 yellow 2 blue 3 black), beat]
+const PL = [
+  [-0.55, -0.55, 6.1, 0, 0.63, 0.028, 0, 13, -1],    // 0 base bar, centre segment
+  [0.42, 0.08, 5.3, 1, 0.6, 0, 0, 10, -1],            // 1 red circle, right half
+  [-0.8, 0.36, 6.6, 0, 0.32, 0.36, 0, 12, -1],        // 2 blue block, top
+  [-0.8, -0.26, 8.0, 0, 0.32, 0.262, 0, 12, 1],       // 3 blue block, bottom
+  [-0.36, -0.522, 5.7, 1, 0.4, 2, 0, 1, -1],          // 4 yellow half-disc
+  [0.42, 0.08, 7.3, 1, 0.6, 1, 0, 10, 2],             // 5 red circle, left half
+  [0.42, -0.55, 7.7, 0, 0.37, 0.028, 0, 13, 3],       // 6 base bar, middle segment
+  [1.13, -0.55, 5.4, 0, 0.36, 0.028, 0, 13, 4],       // 7 base bar, right segment
+  [0.03, -0.4065, 6.3, 3, 0.2, 0, 0, 2, 5],           // 8 blue triangle on the bar
+  [0.46, 0.12, 8.6, 4, 0.74, 0.0065, 0, 3, 6],        // 9 thin ring
+  [-0.84, 0.08, 5.0, 0, 0.85, 0.0068, 0.95, 0, -1],   // 10 red diagonal
+  [1.2, 0.17, 8.2, 0, 0.0065, 0.72, 0, 3, -1],        // 11 vertical rule
+  [1.48, -0.522, 7.4, 5, 0.21, 0, 0, 3, 7],           // 12 black quarter disc
+  [1.45, -0.78, 6.6, 2, 0.065, 0, 0, 1, 8],           // 13 yellow dot
+  [0.92, -0.78, 6.9, 0, 0.055, 0.055, 0.785, 0, 9],   // 14 red diamond
+  [1.16, 0.86, 7.0, 6, 0.085, 0.022, 0, 3, 10],       // 15 row of dots
+  [-1.46, -0.745, 6.0, 7, 0, 0, 0, 3, 14],            // 16 F
+  [-1.18, -0.745, 6.4, 8, 0, 0, 0, 3, 15],            // 17 O
+  [-0.88, -0.745, 5.8, 9, 0, 0, 0, 3, 16],            // 18 R
+  [-0.575, -0.745, 6.2, 10, 0, 0, 0, 3, 17],          // 19 M
+];
+const NP = PL.length, NS = 16;                   // plates 0-15 are shapes, 16-19 letters
+const RAD = PL.map((p) => (p[3] === 0 ? Math.hypot(p[4], p[5]) : p[3] <= 5 ? p[4] * 1.05 + 0.01 : p[3] === 6 ? p[4] * 3 + p[5] : 0.19));
+const PAF = new Float32Array(PL.flatMap((p) => [p[0], p[1], p[2], p[3]])), PBF = new Float32Array(PL.flatMap((p) => [p[4], p[5], p[6], p[7]]));
+const f3 = (v) => v.toFixed(4);
+const GL_PA = PL.map((p) => `vec4(${f3(p[0])},${f3(p[1])},${f3(p[2])},${p[3]}.)`).join(',');
+const GL_PB = PL.map((p) => `vec4(${f3(p[4])},${f3(p[5])},${f3(p[6])},${p[7]}.)`).join(',');
+
+const rm = Reel.RM(stage, {
+  bloom: 0.1, th: 1.6, expo: 0.84, vig: 0.28, grain: 0.02, ca: 0.3, contrast: 1.08, sat: 1.14, bands: 6,
+  uniforms: `
+#define NP ${NP}
+const float F0 = ${F0.toFixed(2)};
+uniform vec4 PA[NP];
+uniform vec4 PB[NP];
+uniform vec4 uC[NP], uR[NP];         // per plate: centre + scale (world units per uv); flip cos/sin, bound radius, visible
+uniform vec3 uRo, uTa; uniform float uRoll, uF;
+uniform int uNS, uNL, uIt;           // loop bounds as uniforms: keeps the software-GL compiler from unrolling`,
+  scene: `
+const float TH = .028;               // plate half thickness (world)
+const float FY = -6.5, WZ = -2.7, RC = 2.2;   // cyc floor, wall, fillet
+const vec3 LDIR = normalize(vec3(-.42, .6, .68));
+const float LANG = .085;             // key light angular radius (soft shadows)
+vec3 PCOL(float c){ c = mod(c, 10.); return c < .5 ? vec3(.6,.026,.02) : c < 1.5 ? vec3(.8,.4,.01) : c < 2.5 ? vec3(.007,.045,.21) : vec3(.012); }
+float box2(vec2 p, vec2 b){ vec2 d = abs(p) - b; return length(max(d,0.)) + min(max(d.x,d.y),0.); }
+float obox(vec2 p, vec2 a, vec2 b, float th){ float l = length(b-a); vec2 d = (b-a)/l; vec2 q = p - (a+b)*.5;
+  q = mat2(d.x,-d.y,d.y,d.x)*q; q = abs(q) - vec2(l, th)*.5; return length(max(q,0.)) + min(max(q.x,q.y),0.); }
+float tri2(vec2 p, float r){ const float k = 1.7320508; p.x = abs(p.x) - r; p.y = p.y + r/k;
+  if (p.x + k*p.y > 0.) p = vec2(p.x - k*p.y, -k*p.x - p.y)/2.; p.x -= clamp(p.x, -2.*r, 0.); return -length(p)*sign(p.y); }
+const float S = .055;                // letter stroke
+float letter(int k, vec2 q){
+  float d = 1e3;
+  if (k == 7) {        // F
+    d = box2(q - vec2(-.0725, 0.), vec2(S*.5, .125));
+    d = min(d, box2(q - vec2(0., .0975), vec2(.1, S*.5)));
+    d = min(d, box2(q - vec2(-.02, .005), vec2(.08, S*.5)));
+  } else if (k == 8) { // O
+    d = abs(length(q) - .0975) - S*.5;
+  } else if (k == 9) { // R
+    d = box2(q - vec2(-.0825, 0.), vec2(S*.5, .125));
+    vec2 b = q - vec2(-.02, .0525); float ring = abs(length(b) - .045) - S*.5; ring = max(ring, -b.x - .0);
+    d = min(d, ring);
+    d = min(d, box2(q - vec2(-.06, .0975), vec2(.04, S*.5)));
+    d = min(d, box2(q - vec2(-.06, .0075), vec2(.04, S*.5)));
+    d = min(d, obox(q, vec2(-.03, .0), vec2(.09, -.125), S));
+  } else {             // M
+    d = box2(q - vec2(-.1025, 0.), vec2(S*.5, .125));
+    d = min(d, box2(q - vec2(.1025, 0.), vec2(S*.5, .125)));
+    d = min(d, obox(q, vec2(-.105, .12), vec2(0., -.06), S));
+    d = min(d, obox(q, vec2(.105, .12), vec2(0., -.06), S));
+  }
+  return d;
+}
+float sdS(int i, vec2 q){                         // shapes (types 0-6)
+  vec4 b = PB[i]; float ty = PA[i].w;
+  if (ty < .5) { float c = cos(b.z), s = sin(b.z); q = mat2(c,-s,s,c)*q; return box2(q, b.xy); }
+  if (ty < 1.5) { float d = length(q) - b.x; return b.y < .5 ? max(d, -q.x) : b.y < 1.5 ? max(d, q.x) : max(d, -q.y); }
+  if (ty < 2.5) return length(q) - b.x;
+  if (ty < 3.5) return tri2(q, b.x);
+  if (ty < 4.5) return abs(length(q) - b.x) - b.y;
+  if (ty < 5.5) return max(length(q) - b.x, max(-q.x, -q.y));
+  float k = clamp(floor(q.x/b.x) + .5, -2.5, 2.5); return length(q - vec2(k*b.x, 0.)) - b.y;
+}
+float sdL(int i, vec2 q){ return letter(int(PA[i].w + .5), q); }   // letters (types 7-10)
+// plate i: uC = centre.xyz + world units per uv; uR = cos/sin of the flip, bound radius, visible
+#define HITPLATE(NAME, SDF) \
+float NAME(int i, vec3 ro, vec3 rd, float tMax, out vec3 nw, out float edge){ \
+  edge = 0.; nw = vec3(0.,0.,1.); \
+  vec4 C = uC[i], Rr = uR[i]; \
+  vec3 oc = ro - C.xyz; float bb = dot(oc, rd), cc = dot(oc, oc) - Rr.z*Rr.z; float h = bb*bb - cc; \
+  if (h < 0. || -bb - sqrt(h) > tMax || Rr.w < .5) return -1.; \
+  mat3 Ri = mat3(Rr.x,0.,Rr.y, 0.,1.,0., -Rr.y,0.,Rr.x); \
+  vec3 o = Ri*oc, d = Ri*rd; float k = C.w; \
+  float dz = abs(d.z) < 1e-4 ? 1e-4 : d.z; \
+  float ta = (-TH - o.z)/dz, tb = (TH - o.z)/dz; \
+  float t0 = max(min(ta, tb), 1e-3), t1 = max(ta, tb); \
+  if (t1 < t0) return -1.; \
+  vec2 q = (o.xy + d.xy*t0)/k; float s = SDF(i, q); \
+  mat3 Rw = mat3(Rr.x,0.,-Rr.y, 0.,1.,0., Rr.y,0.,Rr.x); \
+  if (s <= 0.) { nw = Rw*vec3(0., 0., -sign(dz)); return t0; } \
+  float sp = length(d.xy)/k; if (sp < 1e-5) return -1.; \
+  float t = t0; \
+  for (int j=0;j<uIt;j++){ t += s/sp; if (t > t1) return -1.; q = (o.xy + d.xy*t)/k; s = SDF(i, q); if (s < 2e-4) break; } \
+  if (s > 2e-3) return -1.; \
+  vec2 g = normalize(vec2(SDF(i, q + vec2(1e-3, 0.)) - s, SDF(i, q + vec2(0., 1e-3)) - s)); \
+  nw = Rw*vec3(g, 0.); \
+  edge = 1. + clamp((o.z + d.z*t)/TH*.5 + .5, 0., 1.); \
+  return t; \
+}
+HITPLATE(hitS, sdS)
+HITPLATE(hitL, sdL)
+#define SHADOWLOOP(SDF, I0, I1) \
+  for (int i=I0;i<I1;i++){ \
+    vec4 C = uC[i], Rr = uR[i]; if (Rr.w < .5) continue; \
+    vec3 pc = C.xyz - p; float along = dot(pc, LDIR); if (along < 0.) continue; \
+    if (length(pc - LDIR*along) > Rr.z + along*tl*1.5) continue; \
+    mat3 Ri = mat3(Rr.x,0.,Rr.y, 0.,1.,0., -Rr.y,0.,Rr.x); \
+    vec3 o = Ri*(p - C.xyz), d = Ri*LDIR; if (abs(d.z) < 1e-3) continue; \
+    float t = -o.z/d.z; if (t < .02) continue; \
+    float s = SDF(i, (o.xy + d.xy*t)/C.w)*C.w; \
+    sh = min(sh, smoothstep(-1., 1., s/(t*tl))); \
+  }
+// cyc (floor + fillet + back wall), analytic
+float hitCyc(vec3 ro, vec3 rd, out vec3 n){
+  float tb = 1e9; n = vec3(0., 1., 0.);
+  if (rd.z < 0.) { float t = (WZ - ro.z)/rd.z; vec3 p = ro + rd*t; if (p.y >= FY + RC && t > 0.) { tb = t; n = vec3(0.,0.,1.); } }
+  if (rd.y < 0.) { float t = (FY - ro.y)/rd.y; vec3 p = ro + rd*t; if (p.z >= WZ + RC && t > 0. && t < tb) { tb = t; n = vec3(0.,1.,0.); } }
+  vec2 c = vec2(FY + RC, WZ + RC), o = ro.yz - c, d = rd.yz;
+  float a = dot(d,d), b = dot(o,d), cc = dot(o,o) - RC*RC, h = b*b - a*cc;
+  if (h > 0. && a > 1e-6) { float t = (-b + sqrt(h))/a; vec3 p = ro + rd*t; if (t > 0. && t < tb && p.y <= c.x && p.z <= c.y) { tb = t; n = vec3(0., normalize(c - p.yz)); } }
+  return tb;
+}
+float shadowAt(vec3 p){
+  float sh = 1.;
+  float tl = tan(LANG);
+  SHADOWLOOP(sdS, 0, uNS)
+  SHADOWLOOP(sdL, uNS, uNS + uNL)
+  return sh;
+}
+float rectL(vec3 r, vec3 c, vec3 up, vec2 hs, float soft){
+  float cz = dot(r, c); if (cz <= 0.) return 0.;
+  vec3 u = normalize(cross(up, c)), v = cross(c, u); vec2 q = vec2(dot(r,u), dot(r,v))/cz;
+  vec2 e = smoothstep(hs + soft, hs - soft, abs(q)); return e.x*e.y;
+}
+vec3 env(vec3 r){
+  vec3 c = mix(vec3(.62,.6,.56), vec3(.9,.88,.84), smoothstep(-.3, .8, r.y));
+  c += vec3(1.,.97,.92)*7.*rectL(r, LDIR, vec3(0.,1.,0.), vec2(.38,.28), .1);
+  c += vec3(.9,.94,1.)*1.6*rectL(r, normalize(vec3(.8,.25,.55)), vec3(0.,1.,0.), vec2(.12,.5), .08);
+  return c;
+}
+vec3 render(vec2 fc){
+  vec2 uv = (2.*fc - uRes)/uRes.y;
+  vec3 ro = uRo;
+  vec3 rd = camMat(ro, uTa, uRoll)*normalize(vec3(uv, uF));
+  float tBest = 1e9; vec3 nB = vec3(0.); float eB = 0.; int iB = -1;
+  for (int i=0;i<uNS;i++){ vec3 nw; float ed; float t = hitS(i, ro, rd, tBest, nw, ed); if (t > 0. && t < tBest) { tBest = t; nB = nw; eB = ed; iB = i; } }
+  for (int i=uNS;i<uNS+uNL;i++){ vec3 nw; float ed; float t = hitL(i, ro, rd, tBest, nw, ed); if (t > 0. && t < tBest) { tBest = t; nB = nw; eB = ed; iB = i; } }
+  vec3 nc; float tc = hitCyc(ro, rd, nc);
+  vec3 col;
+  if (iB < 0 && tc > 1e8) { gDepth = 60.; return vec3(.64,.585,.49)*1.75; }
+  bool plate = iB >= 0 && tBest < tc;
+  float t = plate ? tBest : tc;
+  vec3 p = ro + rd*t, n = plate ? nB : nc;
+  if (dot(n, rd) > 0.) n = -n;
+  gDepth = t;
+  vec3 alb;
+  float rough = .5;
+  if (plate) {
+    if (eB > .5 && PB[iB].w < 9.5) {                 // raw birch plywood edge with glue layers
+      float layer = fract((eB - 1.)*5.);
+      alb = mix(vec3(.62,.46,.28), vec3(.74,.58,.38), smoothstep(.0, .2, layer)*smoothstep(1., .8, layer));
+      alb *= .9 + .1*vnoise(p*vec3(40.,40.,4.));
+    } else {
+      alb = PCOL(PB[iB].w);
+      alb *= .97 + .05*vnoise(p*24.);               // brushed paint
+    }
+    rough = .38;
+  } else {
+    alb = vec3(.64,.585,.49);                        // warm paper cyc
+    alb *= .985 + .03*vnoise(p*3.);
+  }
+  float sh = shadowAt(p + n*.002);
+  float ndl = max(dot(n, LDIR), 0.);
+  vec3 col0 = alb * vec3(1.,.96,.9) * 2.0 * ndl * sh;
+  col0 += alb * vec3(.62,.66,.74) * .42 * (.55 + .45*n.y);                // sky / studio ambient
+  col0 += alb * vec3(.95,.93,.9) * .3 * max(dot(n, normalize(vec3(.15,.1,1.))), 0.);   // frontal fill (camera side)
+  col0 += alb * vec3(.82,.76,.66) * .16 * max(-n.y, 0.);                  // floor bounce
+  if (plate) {
+    float F = schlick(max(dot(n, -rd), 0.), .035);
+    vec3 r = reflect(rd, n);
+    col0 = col0*(1. - F) + env(r)*F*(eB > .5 ? .25 : 1.);
+  } else {
+    // softbox pool on the wall
+    col0 *= .9 + .18*exp(-dot(p.xy - vec2(-.6, .8), p.xy - vec2(-.6, .8))*.05);
+  }
+  return col0;
+}`,
+});
+
+// ---- overlay: small print typography after the alignment ----
+const ov = Reel.canvas2d(stage);
+function uvToPx(x, y, z = 1) { return [960 + x * 540 * z, 540 - y * 540 * z]; }
+
+// ---- motion ----
+function plateAnim(i, t) {
+  const b = PL[i][8];
+  if (b < 0) return [0, 1, 0, 1];
+  const tb = b * B - 0.16, u = t - tb;
+  if (u < 0) return [0, 1, 0, 0];
+  const s = Reel.spring(u, { k: 170, c: 15 });
+  const dir = i % 2 ? 1 : -1;
+  return [dir * (Math.PI / 2) * (1 - s), lerp(0.55, 1, Reel.spring(u, { k: 200, c: 18 })), 0.28 * (1 - Reel.spring(u, { k: 150, c: 17 })), 1];
+}
+function camera(t) {
+  const u = clamp(t / FIN);
+  const e = 1 - Math.pow(1 - u, 2.15);                  // arrives with speed: the pieces "click" together
+  const az = -0.86 * (1 - e), el = 0.5 * (1 - e), dist = lerp(8.4, CZ - 0.3, e);
+  const ta = [lerp(1.0, 0, e), lerp(-0.45, 0, e), lerp(0.3, 0.3, e)];
+  let ro = [ta[0] + dist * Math.sin(az) * Math.cos(el), ta[1] + dist * Math.sin(el), ta[2] + dist * Math.cos(az) * Math.cos(el)];
+  let f = lerp(1.5, F0, e);
+  if (t > FIN) {
+    f = F0 * (1 + 0.045 * E.inOutSine(clamp((t - FIN) / (10 - FIN))));
+    const k = Math.exp(-(t - FIN) * 18) * Math.sin((t - FIN) * 70) * 0.012;   // a tiny jolt at the click
+    ro = [ro[0] + k, ro[1] - k * 0.6, ro[2]];
+  }
+  return { ro, ta, roll: 0.07 * (1 - e), f, e };
+}
+
+Reel.scene({
+  duration: 10, fps: 30,
+  fonts: ['700 60px "TeX Gyre Adventor"', '900 44px "Noto Sans CJK SC"', '500 20px "Noto Sans CJK SC"'],
+  cues: [{ t: 0.5, sfx: 'block', gain: 0.55 }, { t: 1.0, sfx: 'block', gain: 0.55 }, { t: 1.5, sfx: 'block', gain: 0.55 }, { t: 2.0, sfx: 'block', gain: 0.55 }, { t: 2.5, sfx: 'block', gain: 0.55 }, { t: 3.0, sfx: 'block', gain: 0.55 }, { t: 3.5, sfx: 'block', gain: 0.55 }, { t: 4.0, sfx: 'block', gain: 0.55 }, { t: 4.5, sfx: 'block', gain: 0.55 }, { t: 5.0, sfx: 'block', gain: 0.55 }, { t: 4.6, sfx: 'riser_short', gain: 0.45 }, { t: 6.5, sfx: 'impact', gain: 0.9 }, { t: 7.0, sfx: 'block', gain: 0.6 }, { t: 7.5, sfx: 'block', gain: 0.6 }, { t: 8.0, sfx: 'block', gain: 0.6 }, { t: 8.5, sfx: 'block', gain: 0.6 }, { t: 9.0, sfx: 'rim', gain: 0.6 }, { t: 9.5, sfx: 'rim', gain: 0.5 }],
+  render(t) {
+    const cam = camera(t);
+    const UC = new Float32Array(NP * 4), UR = new Float32Array(NP * 4);
+    let nl = 0;
+    for (let i = 0; i < NP; i++) {
+      const [fl, sc, dy, vis] = plateAnim(i, t), [cx, cy, d] = PL[i];
+      const k = d / F0 * sc;
+      UC.set([cx * d / F0, (cy + dy) * d / F0, CZ - d, k], i * 4);
+      UR.set([Math.cos(fl), Math.sin(fl), RAD[i] * k + 0.06, vis], i * 4);
+      if (i >= NS && vis) nl = i - NS + 1;
+    }
+    rm.setArr('uC', UC); rm.setArr('uR', UR); rm.setArr('PA', PAF); rm.setArr('PB', PBF);
+    rm.set('uNS', { __ints: true, v: NS }); rm.set('uNL', { __ints: true, v: nl }); rm.set('uIt', { __ints: true, v: 8 });
+    rm.set('uRo', cam.ro).set('uTa', cam.ta).set('uRoll', cam.roll).set('uF', cam.f);
+    const dx = cam.ro[0] - cam.ta[0], dy = cam.ro[1] - cam.ta[1], dz = cam.ro[2] - cam.ta[2];
+    const focus = Math.hypot(dx, dy, dz);
+    const ap = 0.9 * (1 - E.inOutSine(clamp((t - (FIN - 1.2)) / 1.2)));
+    rm.render(t, { focus, aperture: ap * 110, maxCoc: ap * 9 });
+    // print typography (screen space, follows the final zoom)
+    const { ctx, begin } = ov; begin();
+    ctx.clearRect(0, 0, 1920, 1080);
+    if (t > FIN) {
+      const z = cam.f / F0;
+      const a18 = clamp((t - 18 * B + 0.05) / 0.12), a19 = clamp((t - 19 * B + 0.05) / 0.12);
+      ctx.save();
+      ctx.fillStyle = 'rgba(22,22,22,.9)';
+      if (a18 > 0) {
+        ctx.globalAlpha = a18;
+        let [x, y] = uvToPx(0.08, -0.84, z);
+        ctx.font = `900 ${Math.round(46 * z)}px "Noto Sans CJK SC"`; ctx.textBaseline = 'middle'; ctx.fillText(C.tag, x, y);
+        [x, y] = uvToPx(-1.6, 0.9, z);
+        ctx.font = `700 ${Math.round(30 * z)}px "TeX Gyre Adventor"`; ctx.fillText(C.no, x, y);
+        ctx.font = `700 ${Math.round(15 * z)}px "TeX Gyre Adventor"`; if ('letterSpacing' in ctx) ctx.letterSpacing = '4px'; ctx.fillText(C.sub, x, y + 34 * z); if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
+      }
+      if (a19 > 0) {
+        ctx.globalAlpha = a19;
+        const [x, y] = uvToPx(1.04, -0.97, z);
+        ctx.font = `500 ${Math.round(16 * z)}px "Noto Sans CJK SC"`; ctx.fillText(C.credit, x, y);
+        // registration / crop marks: the sculpture is now a print
+        ctx.strokeStyle = 'rgba(22,22,22,.75)'; ctx.lineWidth = 1.6;
+        const m = [[-1.62, 0.93], [1.62, 0.93], [-1.62, -0.93], [1.62, -0.93]];
+        for (const [ux, uy] of m) { const [px, py] = uvToPx(ux, uy, z); const sx = Math.sign(ux), sy = -Math.sign(uy); ctx.beginPath(); ctx.moveTo(px - sx * 30, py); ctx.lineTo(px + sx * 4, py); ctx.moveTo(px, py - sy * 30); ctx.lineTo(px, py + sy * 4); ctx.stroke(); }
+      }
+      ctx.restore();
+    }
+  },
+});
+</script></body></html>

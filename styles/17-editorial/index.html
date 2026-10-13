@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>17 数据新闻编辑风 · Editorial Data</title>
+<script src="../../lib/core.js"></script>
+</head><body><div id="stage"></div>
+<script>
+/* ===== 17 数据新闻 · 编辑风 · EDITORIAL DATA =====
+   A full newspaper feature page, typeset for real (masthead, serif headline, deck, byline, two-column
+   body copy, captions), with live graphics: a line chart that draws itself with an annotation, a counter,
+   a waffle chart, a highlighter and a pull quote. The camera travels the page like a reader's eye and
+   finally pulls back to reveal the whole layout. Numbers are illustrative (labelled on the page). */
+const { E, clamp, inv, lerp } = Reel;
+const stage = Reel.makeStage('#2a2722');
+const C = Reel.cfg({
+  mast: '创作者周报', mastEn: 'THE CREATOR WEEKLY', date: '2026 年 10 月 6 日 · 星期二 · 第 20 期',
+  kicker: '深度 · 数据', h1: '一个人，', h2: '就是一支队伍', hl: '一支队伍',
+  deck: '剪辑、字幕、配乐、包装——过去要一个小团队一周完成的活，现在一个创作者两天就能做完。',
+  by: '文 / 肖雄　　数据图 / XIAOXIONG 编辑部',
+  quote: '工具在变，讲故事的人不变。', note: '注：本版数字为示意数据，仅用于展示数据新闻的版式与动效。',
+});
+const RS = Reel.RS;
+const W = Math.round(1920 * RS), H = Math.round(1080 * RS), K = W / 1920;
+const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+cv.style.cssText = 'position:absolute;left:0;top:0;width:1920px;height:1080px';
+stage.appendChild(cv);
+const ctx = cv.getContext('2d');
+// the page: 1600 x 2600 design px, rendered once at 1.25x of device scale for crisp zooms
+const PWd = 1600, PHd = 2600, PS = Math.min(1.6, 1.25 * K * 1.6);
+const page = document.createElement('canvas'); page.width = Math.round(PWd * PS); page.height = Math.round(PHd * PS);
+const p = page.getContext('2d');
+const INK = '#161412', RED = '#c8302b', GRAY = '#8a8478', PAPER = '#f4f0e6', HL = 'rgba(255,214,51,.85)';
+const SERIF = '"Noto Serif CJK SC"', SANS = '"Noto Sans CJK SC"';
+const BODY = [
+  '周一上午九点，肖雄打开电脑，先让 AI 把上周的素材按镜头分好类。过去这一步要花掉他整整半天：翻素材、记时间码、给每段打标签。现在，十分钟后他已经开始挑选画面了。',
+  '他是一名独立创作者，一个人运营着三个账号。两年前，他每周最多发两条视频；今年，这个数字变成了十四条。“不是我变快了，”他说，“是很多重复的活不用我亲手做了。”',
+  '本报对 1,200 位创作者的调查显示，使用 AI 辅助剪辑后，平均每周产出提升到原来的七倍左右；但真正决定播放量的，仍然是选题和讲故事的能力。',
+  '“AI 能把一条视频做得更快，但没法替你决定这条视频为什么值得被看见。”受访者中，有超过六成的人表达了类似的看法。效率释放出来的时间，被重新投回了选题、采访和打磨开头的前三秒。',
+  '这也许是这一轮工具变革里最容易被忽略的部分：门槛降低之后，竞争并没有消失，只是从“谁会剪”转移到了“谁会讲”。',
+];
+function wrapCJK(ctx2, text, maxW) {
+  const lines = []; let line = '';
+  for (const ch of text) { const test = line + ch; if (ctx2.measureText(test).width > maxW && line) { lines.push(line); line = ch; } else line = test; }
+  if (line) lines.push(line); return lines;
+}
+function buildPage() {
+  p.setTransform(PS, 0, 0, PS, 0, 0);
+  p.fillStyle = PAPER; p.fillRect(0, 0, PWd, PHd);
+  // paper fibres + slight mottling
+  for (let i = 0; i < 2600; i++) { p.fillStyle = `rgba(90,70,40,${Math.random() * 0.035})`; p.fillRect(Math.random() * PWd, Math.random() * PHd, Math.random() * 3 + 1, 1); }
+  // masthead
+  p.fillStyle = INK; p.textBaseline = 'alphabetic';
+  p.font = `900 120px ${SERIF}`; p.textAlign = 'center'; p.fillText(C.mast, PWd / 2, 190);
+  p.font = `600 22px Inter`; if ('letterSpacing' in p) p.letterSpacing = '12px'; p.fillText(C.mastEn, PWd / 2, 238); if ('letterSpacing' in p) p.letterSpacing = '0px';
+  p.fillRect(80, 268, PWd - 160, 4); p.fillRect(80, 278, PWd - 160, 1.5);
+  p.font = `500 20px ${SANS}`; p.fillStyle = GRAY; p.textAlign = 'left'; p.fillText(C.date, 80, 312); p.textAlign = 'right'; p.fillText('本版 4 页 · 售价 2 元', PWd - 80, 312);
+  p.fillStyle = INK; p.fillRect(80, 330, PWd - 160, 1.5);
+  // kicker + headline
+  p.textAlign = 'left'; p.fillStyle = RED; p.font = `700 26px ${SANS}`; p.fillText(C.kicker, 80, 420);
+  p.fillStyle = INK; p.font = `900 150px ${SERIF}`; p.fillText(C.h1, 72, 590); p.fillText(C.h2, 72, 770);
+  // deck + byline
+  p.font = `400 34px ${SERIF}`; p.fillStyle = '#3a3630';
+  wrapCJK(p, C.deck, 1080).forEach((l, i) => p.fillText(l, 80, 860 + i * 54));
+  p.font = `500 22px ${SANS}`; p.fillStyle = GRAY; p.fillText(C.by, 80, 990);
+  p.fillStyle = INK; p.fillRect(80, 1020, PWd - 160, 1.5);
+  // body copy, two columns, with a drop cap
+  p.font = `400 26px ${SERIF}`; p.fillStyle = '#26231f';
+  const colW = 640, lh = 46; let col = 0, y = 1250, x0 = 80;
+  const start = (c) => { x0 = c === 0 ? 80 : 880; y = c === 0 ? 1250 : 1250; };
+  start(0);
+  BODY.forEach((para, pi) => {
+    let txt = para;
+    if (pi === 0) { p.font = `900 120px ${SERIF}`; p.fillStyle = RED; p.fillText(txt[0], x0, y + 64); txt = txt.slice(1); p.font = `400 26px ${SERIF}`; p.fillStyle = '#26231f'; }
+    const lines = [];
+    if (pi === 0) { const first = wrapCJK(p, txt, colW - 110); first.slice(0, 2).forEach((l) => lines.push([l, 110])); wrapCJK(p, first.slice(2).join(''), colW).forEach((l) => lines.push([l, 0])); }
+    else wrapCJK(p, '　　' + txt, colW).forEach((l) => lines.push([l, 0]));
+    for (const [l, ind] of lines) {
+      if (y > 2096) { col++; start(col); y = 1250; }
+      if (col === 1 && y > 1690 && y < 1960) y = 1960;          // room for the pull quote
+      p.fillText(l, x0 + ind, y); y += lh;
+    }
+    y += 18;
+  });
+  // section rules / captions under the graphics area
+  p.fillStyle = INK; p.fillRect(80, 2140, PWd - 160, 1.5);
+  p.font = `400 20px ${SANS}`; p.fillStyle = GRAY; p.fillText(C.note, 80, 2550);
+  p.fillRect(80, 2510, PWd - 160, 1);
+}
+// live graphics are drawn per frame in page coordinates
+const CH = { x: 1180, y: 380, w: 340, h: 0 };    // (unused placeholder)
+const WEEKS = 12;
+const MAN = [2, 2, 3, 2, 2, 3, 2, 3, 2, 3, 2, 2], AI = [2, 2, 3, 3, 4, 6, 8, 9, 11, 12, 13, 14];
+function chart(g, t) {
+  // line chart box at right column under the headline: x 1220-1520, y 380-1000 is the deck... place it beside the headline
+  const x = 1060, y = 380, w = 460, h = 360;
+  const a0 = E.outCubic(clamp((t - 1.6) / 0.5));
+  if (a0 <= 0) return;
+  g.globalAlpha = a0;
+  g.fillStyle = INK; g.font = `700 24px ${SANS}`; g.textAlign = 'left'; g.fillText('每周产出（条）', x, y - 22);
+  g.font = `400 17px ${SANS}`; g.fillStyle = GRAY; g.fillText('同一位创作者，连续 12 周', x, y + 4);
+  // axes + gridlines
+  g.strokeStyle = 'rgba(22,20,18,.15)'; g.lineWidth = 1;
+  for (let v = 0; v <= 15; v += 5) { const yy = y + h - (v / 15) * (h - 60); g.beginPath(); g.moveTo(x, yy); g.lineTo(x + w, yy); g.stroke(); g.fillStyle = GRAY; g.font = `500 15px Inter`; g.textAlign = 'right'; g.fillText(String(v), x - 8, yy + 5); }
+  g.textAlign = 'center'; for (let i = 0; i < WEEKS; i += 2) g.fillText('W' + (i + 1), x + (i / (WEEKS - 1)) * w, y + h + 24);
+  g.globalAlpha = 1;
+  const draw = clamp((t - 2.0) / 1.6);
+  const pt = (arr, i) => [x + (i / (WEEKS - 1)) * w, y + h - (arr[i] / 15) * (h - 60)];
+  // shaded gap between the lines
+  const nDraw = draw * (WEEKS - 1);
+  g.beginPath();
+  for (let i = 0; i <= nDraw; i++) { const q = pt(AI, i); i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1]); }
+  for (let i = Math.floor(nDraw); i >= 0; i--) { const q = pt(MAN, i); g.lineTo(q[0], q[1]); }
+  g.fillStyle = 'rgba(200,48,43,.10)'; g.fill();
+  for (const [arr, col, wd] of [[MAN, GRAY, 3], [AI, RED, 4.5]]) {
+    g.strokeStyle = col; g.lineWidth = wd; g.lineJoin = 'round'; g.lineCap = 'round'; g.beginPath();
+    for (let i = 0; i <= Math.floor(nDraw); i++) { const q = pt(arr, i); i ? g.lineTo(q[0], q[1]) : g.moveTo(q[0], q[1]); }
+    const f = nDraw - Math.floor(nDraw), i0 = Math.floor(nDraw);
+    if (i0 < WEEKS - 1) { const a = pt(arr, i0), b = pt(arr, i0 + 1); g.lineTo(lerp(a[0], b[0], f), lerp(a[1], b[1], f)); }
+    g.stroke();
+  }
+  // annotation at week 6
+  const an = E.outBack(clamp((t - 2.9) / 0.35));
+  if (an > 0) {
+    const q = pt(AI, 5);
+    g.fillStyle = RED; g.beginPath(); g.arc(q[0], q[1], 7 * an, 0, 7); g.fill();
+    g.strokeStyle = INK; g.lineWidth = 1.5; g.beginPath(); g.moveTo(q[0], q[1] - 10); g.lineTo(q[0] - 30, q[1] - 90 * an); g.lineTo(q[0] - 150, q[1] - 90 * an); g.stroke();
+    g.globalAlpha = an; g.fillStyle = INK; g.font = `700 18px ${SANS}`; g.textAlign = 'left'; g.fillText('第 6 周：开始用 AI 剪辑', q[0] - 150, q[1] - 100 * an); g.globalAlpha = 1;
+  }
+  // end labels
+  const el = clamp((t - 3.5) / 0.3);
+  if (el > 0) { g.globalAlpha = el; g.font = `800 20px ${SANS}`; g.textAlign = 'right'; let q = pt(AI, 11); g.fillStyle = RED; g.fillText('AI 辅助 14 条', q[0], q[1] - 16); q = pt(MAN, 11); g.fillStyle = GRAY; g.fillText('纯手工 2 条', q[0], q[1] - 14); g.globalAlpha = 1; }
+}
+function bigNumber(g, t) {
+  // the x7 figure + waffle chart in the graphics band (y 2160-2490)
+  const a = E.outCubic(clamp((t - 4.7) / 0.4));
+  if (a <= 0) return;
+  g.globalAlpha = a;
+  const n = Math.min(7, 1 + Math.floor(clamp((t - 4.8) / 0.9) * 6.999));
+  g.fillStyle = RED; g.font = `900 260px Inter`; g.textAlign = 'left'; g.fillText('×' + n, 80, 2420);
+  g.fillStyle = INK; g.font = `700 30px ${SANS}`; g.fillText('每周可产出的视频条数', 90, 2475);
+  // waffle: 10 x 10, 68 filled
+  const wx = 860, wy = 2190, cs = 26;
+  g.font = `700 26px ${SANS}`; g.fillText('68% 的受访创作者已在用 AI', wx, wy - 14);
+  const fill = Math.floor(clamp((t - 5.2) / 1.0) * 68);
+  for (let i = 0; i < 100; i++) {
+    const cx = wx + (i % 20) * (cs + 6), cy = wy + 10 + Math.floor(i / 20) * (cs + 6);
+    g.fillStyle = i < fill ? RED : 'rgba(22,20,18,.12)';
+    g.beginPath(); g.roundRect(cx, cy, cs, cs, 5); g.fill();
+  }
+  g.globalAlpha = 1;
+}
+function quote(g, t) {
+  const a = E.outCubic(clamp((t - 6.6) / 0.5));
+  if (a <= 0) return;
+  // pull quote in the right column, boxed by rules
+  const x = 880, y = 1800;
+  g.globalAlpha = a;
+  g.fillStyle = RED; g.font = `900 140px ${SERIF}`; g.textAlign = 'left'; g.fillText('“', x - 10, y + 10);
+  g.fillStyle = INK; g.font = `900 46px ${SERIF}`; g.fillText(C.quote.slice(0, 5), x + 70, y - 10); g.fillText(C.quote.slice(5), x + 70, y + 54);
+  g.fillRect(x, y + 100, 620, 2);
+  g.globalAlpha = 1;
+}
+function highlighter(g, t, x, y, w, t0, h = 40) {
+  const u = E.inOutSine(clamp((t - t0) / 0.45));
+  if (u <= 0) return;
+  g.save(); g.globalCompositeOperation = 'multiply';
+  g.fillStyle = HL;
+  g.beginPath(); g.moveTo(x, y + 6); g.lineTo(x + w * u, y + 2); g.lineTo(x + w * u + 6, y + h); g.lineTo(x - 4, y + h + 4); g.closePath(); g.fill();
+  g.restore();
+}
+// camera keyframes over the page (page px centre, zoom)
+const KEYS = [
+  { t: 0.0, x: 640, y: 560, z: 1.32 }, { t: 1.4, x: 700, y: 620, z: 1.2 },
+  { t: 2.2, x: 1150, y: 560, z: 1.45 }, { t: 4.2, x: 1200, y: 600, z: 1.4 },
+  { t: 5.0, x: 790, y: 2150, z: 1.25 }, { t: 6.2, x: 800, y: 2150, z: 1.22 },
+  { t: 7.0, x: 1150, y: 1770, z: 1.3 }, { t: 8.0, x: 1160, y: 1780, z: 1.28 },
+  { t: 9.4, x: 800, y: 1300, z: 0.41 }, { t: 10, x: 800, y: 1300, z: 0.4 },
+];
+function camAt(t) {
+  let i = 0; while (i < KEYS.length - 2 && t > KEYS[i + 1].t) i++;
+  const a = KEYS[i], b = KEYS[i + 1];
+  const u = E.inOutCubic(clamp((t - a.t) / (b.t - a.t)));
+  // zoom interpolated in log space so pulls feel even
+  return { x: lerp(a.x, b.x, u), y: lerp(a.y, b.y, u), z: Math.exp(lerp(Math.log(a.z), Math.log(b.z), u)) };
+}
+let built = false;
+Reel.scene({
+  duration: 10, fps: 30,
+  fonts: [`900 150px ${SERIF}`, `400 26px ${SERIF}`, `700 24px ${SANS}`, '900 260px Inter', '600 22px Inter'],
+  setup() { buildPage(); built = true; },
+  cues: [{ t: 0.3, sfx: 'paper' }, { t: 1.0, sfx: 'marker' }, { t: 2.0, sfx: 'whoosh' }, { t: 2.9, sfx: 'pop' }, { t: 4.8, sfx: 'ticks' }, { t: 5.2, sfx: 'data' }, { t: 6.6, sfx: 'stamp' }, { t: 7.2, sfx: 'marker' }, { t: 8.4, sfx: 'whoosh' }],
+  render(t) {
+    const cam = camAt(t);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    // desk under the page
+    const dg = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, W * 0.75); dg.addColorStop(0, '#3a362f'); dg.addColorStop(1, '#1a1815'); ctx.fillStyle = dg; ctx.fillRect(0, 0, W, H);
+    // camera: page coordinates -> screen; a slight 2.5D tilt when pulled back
+    const z = cam.z * K;
+    const pull = clamp((1.0 - cam.z) / 0.6);
+    ctx.setTransform(z, 0, -0.06 * pull * z, z, (960 - cam.x * cam.z + 0.06 * pull * cam.y * cam.z) * K, (540 - cam.y * cam.z) * K);
+    // page shadow + page
+    ctx.shadowColor = 'rgba(0,0,0,.5)'; ctx.shadowBlur = 60 * z; ctx.shadowOffsetY = 20 * z;
+    ctx.fillStyle = PAPER; ctx.fillRect(0, 0, PWd, PHd);
+    ctx.shadowColor = 'transparent';
+    ctx.drawImage(page, 0, 0, PWd, PHd);
+    // headline reveal + highlighter
+    highlighter(ctx, t, 372, 708, 600, 0.9, 70);
+    chart(ctx, t);
+    bigNumber(ctx, t);
+    quote(ctx, t);
+    highlighter(ctx, t, 950, 1754, 470, 7.25, 54);
+    // print grain over everything
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = 'rgba(0,0,0,.025)';
+    for (let i = 0; i < 260; i++) ctx.fillRect(((i * 97.13 + t * 300) % 1) * 0 + (Math.sin(i * 12.9 + Math.floor(t * 24)) * 0.5 + 0.5) * W, (Math.sin(i * 78.2 + Math.floor(t * 24) * 3.1) * 0.5 + 0.5) * H, 2 * K, 2 * K);
+  },
+});
+</script></body></html>

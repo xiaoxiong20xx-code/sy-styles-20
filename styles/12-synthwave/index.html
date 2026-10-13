@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>12 复古 Synthwave</title>
+<script src="../../lib/core.js"></script><script src="../../lib/gl.js"></script>
+</head><body><div id="stage"></div>
+<script>
+/* ===== 12 复古 · SYNTHWAVE · VHS =====
+   Flying low through a neon valley: a raymarched heightfield whose grid lines glow, a striped sun
+   sinking behind the ridges, palms whipping past. A chrome title with an 80s horizon reflection and a
+   neon script slam in, and the whole frame goes through a VHS pass: chroma bleed, tracking band,
+   head-switch noise, scanlines and the OSD. */
+const { E, clamp, inv, lerp } = Reel;
+const stage = Reel.makeStage('#14002b');
+Reel.ownJitter = true;
+const C = Reel.cfg({ title: 'XIAOXIONG', script: 'Synthwave', osd: 'PLAY ▶' });
+const RS = Reel.RS;
+const W = Math.round(1920 * RS), H = Math.round(1080 * RS), K = W / 1920;
+const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+cv.style.cssText = 'position:absolute;left:0;top:0;width:1920px;height:1080px';
+stage.appendChild(cv);
+const G = Reel.GL(cv);
+const gl = G.gl;
+const sceneT = G.target(W, H, {});
+// overlay (text, palms, OSD) drawn in 2D, composited inside the VHS pass
+const ov = document.createElement('canvas'); ov.width = W; ov.height = H;
+const o = ov.getContext('2d');
+const ovTex = gl.createTexture();
+gl.bindTexture(gl.TEXTURE_2D, ovTex);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+const NOISE = `
+float hash12(vec2 p){ vec3 p3=fract(vec3(p.xyx)*.1031); p3+=dot(p3,p3.yzx+33.33); return fract((p3.x+p3.y)*p3.z); }
+float vn(vec2 p){ vec2 i=floor(p), f=fract(p); f=f*f*(3.-2.*f); return mix(mix(hash12(i),hash12(i+vec2(1,0)),f.x), mix(hash12(i+vec2(0,1)),hash12(i+vec2(1,1)),f.x), f.y); }`;
+const scene = G.program(`#version 300 es
+precision highp float; in vec2 uv; out vec4 oc;
+uniform vec2 uRes, uJit; uniform float uT, uZ, uSunY, uBank, uBoost;
+${NOISE}
+float terrain(vec2 xz){
+  float ax = abs(xz.x);
+  float side = smoothstep(3., 11., ax);
+  float n = vn(xz*vec2(.09,.07))*.62 + vn(xz*.21 + 3.)*.28 + vn(xz*.6 + 7.)*.1;
+  return side*(n*11. + (ax - 3.)*.32) - .02;
+}
+vec3 sky(vec3 rd, vec2 p){
+  float k = clamp(rd.y*2.2 + .05, 0., 1.);
+  vec3 c = mix(vec3(1.,.36,.52), vec3(.45,.07,.45), smoothstep(0., .35, k));
+  c = mix(c, vec3(.06,0.,.14), smoothstep(.3, 1., k));
+  vec2 sp = floor(p*260.); float s = hash12(sp);
+  if (s > .994) c += vec3(.9,.85,1.)*(.35 + .65*sin(uT*3. + s*60.))*smoothstep(.25, .6, k);
+  // the sun: banded lower half, hot gradient, wide glow
+  vec2 sc = vec2(0., uSunY);
+  vec2 q = vec2(rd.x/rd.z, rd.y/rd.z);
+  float r = .29, d = length(q - sc);
+  float yb = (sc.y - q.y)/r;
+  float band = fract((q.y + uT*.02)*26.);
+  float cut = yb > -.05 ? step(smoothstep(-.1, 1., yb)*.8, band) : 1.;
+  vec3 sunC = mix(vec3(1.,.86,.25), vec3(1.,.15,.5), smoothstep(sc.y + r*.85, sc.y - r*.7, q.y));
+  c += vec3(1.,.25,.55)*.45*exp(-max(d - r, 0.)*5.);
+  c = mix(c, sunC*1.15, smoothstep(r, r - .004, d)*cut);
+  return c;
+}
+void main(){
+  vec2 fc = gl_FragCoord.xy + uJit;
+  vec2 p = (2.*fc - uRes)/uRes.y;
+  float cb = cos(uBank), sb = sin(uBank);
+  p = mat2(cb, -sb, sb, cb)*p;
+  vec3 ro = vec3(sin(uT*.35)*.8, 1.45 + .15*sin(uT*.8), uZ);
+  vec3 rd = normalize(vec3(p.x, p.y - .16, 1.75 - uBoost*.35));
+  vec3 col = sky(rd, p);
+  // raymarch the heightfield
+  float t = .2, hit = -1.;
+  for (int i=0;i<110;i++){
+    vec3 q = ro + rd*t;
+    float dh = q.y - terrain(q.xz);
+    if (dh < .003*t){ hit = t; break; }
+    t += max(dh*.4, .012*t);
+    if (t > 140.) break;
+  }
+  if (hit > 0.){
+    vec3 q = ro + rd*hit;
+    vec3 base = vec3(.05,.0,.1);
+    float lw = .025 + hit*.0016;
+    vec2 g = abs(fract(q.xz) - .5);
+    float gx = smoothstep(lw, 0., .5 - g.x), gz = smoothstep(lw, 0., .5 - g.y);
+    float glowx = exp(-(.5 - g.x)/(lw*3.)), glowz = exp(-(.5 - g.y)/(lw*3.));
+    float lines = max(gx, gz), glow = max(glowx, glowz)*.35;
+    float hgt = terrain(q.xz);
+    vec3 lc = mix(vec3(1.,.2,.85), vec3(.2,.9,1.), smoothstep(2., 8., hgt));
+    float fog = exp(-hit*.028);
+    col = mix(col, base + lc*(lines*1.5 + glow)*(.35 + .65*fog), smoothstep(140., 30., hit));
+    col = mix(col, vec3(1.,.3,.6)*.55, (1. - fog)*.55*smoothstep(10., 140., hit));
+    // the road down the valley
+    float road = smoothstep(1.1, 1.0, abs(q.x))*step(hgt, .05);
+    float dash = step(.5, fract(q.z*.25))*smoothstep(.06, .03, abs(q.x));
+    col = mix(col, vec3(.08,.02,.14), road*.85);
+    col += vec3(1.,.85,.4)*dash*road*fog*1.3;
+    col += vec3(1.,.2,.8)*smoothstep(.06, .0, abs(abs(q.x) - 1.05))*road*fog*1.2;
+  }
+  oc = vec4(col, 1.);
+}`);
+const vhs = G.program(`#version 300 es
+precision highp float; in vec2 uv; out vec4 oc;
+uniform sampler2D uS, uO; uniform vec2 uRes; uniform float uT, uGl;
+${NOISE}
+vec3 comp(vec2 u){ vec4 ov = texture(uO, vec2(u.x, 1. - u.y)); vec3 s = texture(uS, u).rgb; return s*(1. - ov.a) + ov.rgb; }
+void main(){
+  vec2 u = uv;
+  float fr = floor(uT*30.);
+  // tracking band rolling down + head-switch wobble at the bottom
+  float band = exp(-pow((u.y - (1. - fract(uT*.12)))/.025, 2.));
+  u.x += (hash12(vec2(floor(u.y*240.), fr)) - .5)*.012*band;
+  u.x += (vn(vec2(u.y*30., uT*4.)) - .5)*.0016;
+  u.x += smoothstep(.04, .0, u.y)*(hash12(vec2(floor(u.y*300.), fr)) - .5)*.03;
+  u.x += uGl*(hash12(vec2(floor(u.y*40.), fr)) - .5)*.06;
+  // chroma bleed: luma sharp, colour smeared to the right
+  float px = 1./uRes.x;
+  vec3 a = comp(u), r = comp(u - vec2(px*3.5, 0.)), b = comp(u + vec2(px*3.5, 0.));
+  vec3 c = vec3(r.r, a.g, b.b);
+  vec3 sm = (comp(u + vec2(px*6., 0.)) + comp(u + vec2(px*12., 0.)))*.5;
+  float L = dot(c, vec3(.3,.59,.11));
+  c = mix(c, L + (sm - dot(sm, vec3(.3,.59,.11)))*1.05, .35);
+  c += (hash12(gl_FragCoord.xy + fr*13.) - .5)*.07;
+  c += band*.18*hash12(gl_FragCoord.xy*1.7 + fr);
+  c *= .9 + .1*sin(gl_FragCoord.y*3.14159*.5);              // scanlines
+  vec2 d = uv - .5; c *= 1. - .55*smoothstep(.35, .85, length(d*vec2(1.,.8)));
+  oc = vec4(c, 1.);
+}`);
+
+/* ---------- overlay ---------- */
+function palm(x, base, s, lean) {
+  // silhouette palm: curved trunk + drooping fronds
+  o.save(); o.translate(x * K, base * K); o.scale(s * K, s * K);
+  o.lineCap = 'round';
+  const draw = (wd, col, blur) => {
+  o.strokeStyle = col; o.shadowColor = '#ff2fa8'; o.shadowBlur = blur;
+  o.lineWidth = 14 + wd;
+  o.beginPath(); o.moveTo(0, 0); o.quadraticCurveTo(lean * 40, -160, lean * 70, -300); o.stroke();
+  const tx = lean * 70, ty = -300;
+  o.lineWidth = 10 + wd;
+  for (let i = 0; i < 9; i++) {
+    const a = -Math.PI / 2 + (i - 4) * 0.42;
+    const L = 130 + (i % 2) * 30;
+    o.beginPath(); o.moveTo(tx, ty);
+    const ex = tx + Math.cos(a) * L, ey = ty + Math.sin(a) * L * 0.5 + 60;
+    o.quadraticCurveTo(tx + Math.cos(a) * L * 0.6, ty + Math.sin(a) * L * 0.6 - 20, ex, ey);
+    o.stroke();
+  }
+  };
+  draw(6, '#ff3fb4', 20);
+  draw(0, '#12001e', 0);
+  o.shadowBlur = 0;
+  o.restore();
+}
+function chrome(str, x, y, size, a, skew) {
+  if (a <= 0) return;
+  o.save(); o.globalAlpha = Math.min(1, a);
+  o.translate(x * K, y * K); o.transform(1, 0, skew, 1, 0, 0);
+  const fs = size * K;
+  o.font = `900 ${fs}px Inter`; o.textAlign = 'center'; o.textBaseline = 'middle';
+  if ('letterSpacing' in o) o.letterSpacing = `${fs * 0.02}px`;
+  // extrusion
+  for (let i = 10; i >= 1; i--) { o.fillStyle = `rgb(${40 + i * 6},0,${70 + i * 6})`; o.fillText(str, i * 0.8 * K, i * 1.2 * K); }
+  o.lineJoin = 'round'; o.lineWidth = fs * 0.07; o.strokeStyle = '#ff63c8'; o.strokeText(str, 0, 0);
+  // classic 80s chrome: sky above the horizon line, ground below
+  const g = o.createLinearGradient(0, -fs * 0.42, 0, fs * 0.42);
+  g.addColorStop(0, '#0b1b5c'); g.addColorStop(0.3, '#6fc3ff'); g.addColorStop(0.49, '#f2fbff');
+  g.addColorStop(0.5, '#3a1a3a'); g.addColorStop(0.56, '#a0335c'); g.addColorStop(0.78, '#ffb35a'); g.addColorStop(1, '#fff3c8');
+  o.fillStyle = g; o.fillText(str, 0, 0);
+  o.lineWidth = fs * 0.018; o.strokeStyle = 'rgba(255,255,255,.85)'; o.strokeText(str, 0, 0);
+  // shine sweep
+  const sw = ((Reel._t || 0) - 5.6) * 1.4;
+  if (sw > -0.2 && sw < 1.2) {
+    o.globalCompositeOperation = 'source-atop';
+    const sg = o.createLinearGradient((-fs * 3 + sw * fs * 6), -fs, (-fs * 3 + sw * fs * 6) + fs * 0.6, fs);
+    sg.addColorStop(0, 'rgba(255,255,255,0)'); sg.addColorStop(0.5, 'rgba(255,255,255,.85)'); sg.addColorStop(1, 'rgba(255,255,255,0)');
+    o.fillStyle = sg; o.fillRect(-fs * 4, -fs, fs * 8, fs * 2);
+  }
+  o.restore();
+}
+function star(x, y, r, a) {
+  if (a <= 0) return;
+  o.save(); o.globalAlpha = a; o.translate(x * K, y * K); o.fillStyle = '#ffffff';
+  o.shadowColor = '#ffffff'; o.shadowBlur = 18 * K;
+  o.beginPath(); for (let i = 0; i < 8; i++) { const an = i / 8 * Math.PI * 2, rr = (i % 2 ? 0.12 : 1) * r * K; o.lineTo(Math.cos(an) * rr, Math.sin(an) * rr); } o.fill();
+  o.restore();
+}
+const fmtTime = (t) => { const s = Math.floor(t); return `00:00:${String(s).padStart(2, '0')}`; };
+
+Reel.scene({
+  duration: 10, fps: 30,
+  fonts: ['900 160px Inter', 'italic 700 120px Lora', '500 30px "DejaVu Sans Mono"'],
+  cues: [{ t: 0.2, sfx: 'vhs' }, { t: 2.0, sfx: 'whoosh' }, { t: 3.9, sfx: 'riser_short' }, { t: 5.55, sfx: 'impact' }, { t: 5.6, sfx: 'neon' }, { t: 6.3, sfx: 'sparkle' }, { t: 8.6, sfx: 'whoosh' }],
+  render(t) {
+    Reel._t = t;
+    const boost = E.inOutSine(clamp((t - 3.9) / 1.6)) * (1 - E.inOutSine(clamp((t - 6.8) / 1.5)));
+    const z = t * 9 + boost * 12 + E.inQuad(clamp((t - 3.9) / 3)) * 8;
+    const sunY = lerp(0.075, 0.02, E.inOutSine(clamp(t / 10)));
+    const bank = Math.sin(t * 0.55) * 0.05;
+    const gl0 = (t > 5.5 && t < 5.7) ? 1 : (t > 8.55 && t < 8.7 ? 0.7 : 0);
+    const jit = Reel.jit || [0, 0];
+    scene.use().set('uRes', [W, H]).set('uJit', [jit[0], -jit[1]]).set('uT', t).set('uZ', z).set('uSunY', sunY).set('uBank', bank).set('uBoost', boost).draw(sceneT);
+    // overlay
+    o.clearRect(0, 0, W, H);
+    // palms rushing past on both sides
+    for (let i = 0; i < 6; i++) {
+      const zp = ((i * 9 + 40) - z) % 54; const zz = zp < 0 ? zp + 54 : zp;
+      if (zz < 1.2) continue;
+      const s = 3.2 / zz, side = i % 2 ? 1 : -1;
+      const x = 960 + side * (5.2 / zz) * 1.75 * 540, base = 540 + (1.45 / zz) * 1.75 * 540 + 0.16 * 540;
+      palm(x, base, s, -side * 0.6);
+    }
+    // title + script
+    const ta = E.outBack(clamp((t - 5.5) / 0.35));
+    if (t > 5.5) {
+      const sc = lerp(2.2, 1, E.outCubic(clamp((t - 5.5) / 0.3)));
+      o.save(); o.translate(960 * K, 430 * K); o.scale(sc, sc); o.translate(-960 * K, -430 * K);
+      chrome(C.title, 960, 430, 170, clamp((t - 5.5) / 0.12), -0.18);
+      o.restore();
+      star(1630, 360, 46 * E.outBack(clamp((t - 6.3) / 0.3)) * (1 - clamp((t - 7.3) / 0.4)), 1);
+    }
+    if (t > 6.0) {
+      const a = clamp((t - 6.0) / 0.15) * (0.85 + 0.15 * Math.sin(t * 40) * (t < 6.4 ? 1 : 0));
+      o.save(); o.translate(1180 * K, 560 * K); o.rotate(-0.12);
+      o.font = `italic 700 ${120 * K}px Lora`; o.textAlign = 'center'; o.textBaseline = 'middle';
+      o.globalAlpha = a; o.shadowColor = '#ff2fa8'; o.shadowBlur = 30 * K; o.lineWidth = 9 * K; o.strokeStyle = '#ff3fb4'; o.strokeText(C.script, 0, 0);
+      o.shadowBlur = 8 * K; o.lineWidth = 3 * K; o.strokeStyle = '#ffe0f4'; o.strokeText(C.script, 0, 0);
+      o.restore();
+    }
+    // OSD
+    o.font = `500 ${30 * K}px "DejaVu Sans Mono"`; o.fillStyle = 'rgba(255,255,255,.9)'; o.textBaseline = 'top';
+    o.shadowColor = 'rgba(0,0,0,.6)'; o.shadowBlur = 4 * K;
+    if (Math.floor(t * 2) % 2 || t > 5) o.fillText(C.osd, 90 * K, 70 * K);
+    o.fillText('SP', 1770 * K, 70 * K);
+    o.fillText('OCT. 06 1986', 90 * K, 980 * K); o.textAlign = 'right'; o.fillText(fmtTime(t + 7), 1830 * K, 980 * K); o.textAlign = 'left';
+    o.shadowBlur = 0;
+    gl.bindTexture(gl.TEXTURE_2D, ovTex);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, ov);
+    gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, false);
+    vhs.use().set('uS', { tex: sceneT.tex, unit: 0 }).set('uO', { tex: ovTex, unit: 1 }).set('uRes', [W, H]).set('uT', t).set('uGl', gl0).draw(null);
+  },
+});
+</script></body></html>

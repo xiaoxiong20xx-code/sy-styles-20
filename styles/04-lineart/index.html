@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>04 线条动画 · Line Art</title>
+<script src="../../lib/core.js"></script>
+</head><body><div id="stage"></div>
+<script>
+/* ===== 04 线条动画 · Line Art =====
+   Nine hundred hair-thin gold lines flow like silk in the wind, then sort themselves into the ridgelines of a
+   mountain range seen in perspective. The camera glides forward, a sun rises behind the peaks, a single bright
+   line walks the terrain to the farthest summit, and the title settles in. Canvas 2D, every line computed. */
+const { E, clamp, inv, lerp } = Reel;
+const C = Reel.cfg({ title: '远方', sub: 'ONE  LINE  ·  ANY  DISTANCE' });
+const stage = Reel.makeStage('#070b17');
+const { ctx, begin } = Reel.canvas2d(stage);
+
+/* ---------- noise ---------- */
+const P = new Uint8Array(512); { let s = 7; const p = [...Array(256).keys()]; for (let i = 255; i > 0; i--) { s = (s * 16807) % 2147483647; const j = s % (i + 1); [p[i], p[j]] = [p[j], p[i]]; } for (let i = 0; i < 512; i++) P[i] = p[i & 255]; }
+const fade = (t) => t * t * t * (t * (t * 6 - 15) + 10);
+const grad3 = (h, x, y, z) => { const u = h < 8 ? x : y, v = h < 4 ? y : h === 12 || h === 14 ? x : z; return ((h & 1) ? -u : u) + ((h & 2) ? -v : v); };
+function noise3(x, y, z) {
+  const X = Math.floor(x) & 255, Y = Math.floor(y) & 255, Z = Math.floor(z) & 255;
+  x -= Math.floor(x); y -= Math.floor(y); z -= Math.floor(z);
+  const u = fade(x), v = fade(y), w = fade(z);
+  const A = P[X] + Y, AA = P[A] + Z, AB = P[A + 1] + Z, B = P[X + 1] + Y, BA = P[B] + Z, BB = P[B + 1] + Z;
+  const L = (a, b, t) => a + t * (b - a);
+  return L(L(L(grad3(P[AA] & 15, x, y, z), grad3(P[BA] & 15, x - 1, y, z), u), L(grad3(P[AB] & 15, x, y - 1, z), grad3(P[BB] & 15, x - 1, y - 1, z), u), v),
+    L(L(grad3(P[AA + 1] & 15, x, y, z - 1), grad3(P[BA + 1] & 15, x - 1, y, z - 1), u), L(grad3(P[AB + 1] & 15, x, y - 1, z - 1), grad3(P[BB + 1] & 15, x - 1, y - 1, z - 1), u), v), w);
+}
+
+/* ---------- terrain (world units; x across, z away from camera, y up) ---------- */
+function height(x, z) {
+  let h = 0, a = 1, f = 0.055;
+  for (let o = 0; o < 5; o++) { const n = 1 - Math.abs(noise3(x * f, z * f, o * 3.1)); h += a * n * n; a *= 0.5; f *= 2.05; }
+  const peak = Math.exp(-(((x - 8.5) * 0.11) ** 2) - (((z - 34) * 0.07) ** 2));   // the summit far away, right third
+  const valley = 1 - 0.75 * Math.exp(-((x * 0.22) ** 2)) * Math.exp(-(((z - 8) * 0.12) ** 2));
+  return (h * 3.2 + peak * 9.5) * valley * Math.min(1, z / 5);
+}
+const NR = 76, NP = 140;              // ridge rows, points per ridge
+const ROWZ = Array.from({ length: NR }, (_, i) => 3 + 52 * Math.pow(i / (NR - 1), 1.35));
+const XR = 46;
+const HGT = ROWZ.map((z) => Float32Array.from({ length: NP }, (_, j) => height(-XR + 2 * XR * j / (NP - 1), z)));
+
+/* ---------- camera ---------- */
+const F = 980;
+function cam(t) {
+  const k = E.inOutSine(inv(2.2, 10, t));
+  return { z: lerp(-6, 1.5, k), y: lerp(7.2, 6.2, k), pitch: lerp(0.2, 0.15, k), cx: 960, cy: 470 };
+}
+function proj(c, x, y, z) {
+  const dz = z - c.z, dy = y - c.y;
+  const cp = Math.cos(c.pitch), sp = Math.sin(c.pitch);
+  const zz = dz * cp - dy * sp, yy = dz * sp + dy * cp;
+  if (zz < 0.5) return null;
+  return [c.cx + F * x / zz, c.cy - F * yy / zz, zz];
+}
+
+/* ---------- flow lines ---------- */
+const NL = NR * 12, NS = 60;
+const SEED = Array.from({ length: NL }, (_, i) => { const r1 = (Math.sin(i * 12.9898) * 43758.5453) % 1, r2 = (Math.sin(i * 78.233) * 12543.123) % 1; return [Math.abs(r1) * 2200 - 140, Math.abs(r2) * 1240 - 80]; });
+function curl(x, y, t) {
+  const s = 0.0016, e = 1.2, z = t * 0.22;
+  const n1 = noise3(x * s, (y + e) * s, z), n2 = noise3(x * s, (y - e) * s, z);
+  const n3 = noise3((x + e) * s, y * s, z), n4 = noise3((x - e) * s, y * s, z);
+  return [(n1 - n2) / (2 * e), -(n3 - n4) / (2 * e)];
+}
+const FL = Array.from({ length: NL }, () => new Float32Array(NS * 2));
+function traceFlow(t) {
+  for (let i = 0; i < NL; i++) {
+    const L = FL[i];
+    let x = SEED[i][0] + 140 * Math.sin(t * 0.35 + i), y = SEED[i][1] + 30 * t;
+    x = ((x + 140) % 2200 + 2200) % 2200 - 140;
+    for (let j = 0; j < NS; j++) {
+      L[j * 2] = x; L[j * 2 + 1] = y;
+      const [vx, vy] = curl(x, y, t);
+      const m = Math.hypot(vx, vy) + 1e-6;
+      x += (vx / m * 0.75 + 0.55) * 10; y += (vy / m * 0.75 - 0.08) * 10;      // a steady wind to the right
+    }
+  }
+}
+
+/* ---------- glyph helpers ---------- */
+const GOLD = [232, 196, 128];
+const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+const grain = document.createElement('canvas'); grain.width = 640; grain.height = 360;
+{ const g = grain.getContext('2d'), im = g.createImageData(640, 360); for (let i = 0; i < im.data.length; i += 4) { const v = Math.random() * 255; im.data[i] = im.data[i + 1] = im.data[i + 2] = v; im.data[i + 3] = 14; } g.putImageData(im, 0, 0); }
+
+Reel.scene({
+  duration: 10, fps: 30,
+  fonts: ['200 150px "Noto Serif CJK SC"', '300 20px Inter'],
+  cues: [{ t: 0.2, sfx: 'swell' }, { t: 2.6, sfx: 'whoosh' }, { t: 4.4, sfx: 'chime' }, { t: 5.6, sfx: 'pen' }, { t: 7.4, sfx: 'sparkle' }],
+  render(t) {
+    begin();
+    // sky
+    const g = ctx.createLinearGradient(0, 0, 0, 1080);
+    g.addColorStop(0, '#050811'); g.addColorStop(0.55, '#0b1226'); g.addColorStop(1, '#070b17');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, 1920, 1080);
+    const c = cam(t);
+    const morph = (i) => E.inOutCubic(inv(2.1 + (i % 12) * 0.035 + (Math.floor(i / 12) / NR) * 1.1, 3.6 + (Math.floor(i / 12) / NR) * 1.1, t));
+    const solid = E.inOutSine(inv(4.0, 5.6, t));                       // ridges become an opaque landscape
+    const grow = E.outCubic(inv(0.05, 1.3, t));
+    // sun: rises behind the far ridges
+    const sunK = E.outCubic(inv(4.6, 8.2, t));
+    const hz = proj(c, 0, 0, 70);
+    if (sunK > 0 && hz) {
+      const sx = 1120, sy = hz[1] + 60 - sunK * 410, R = 165;
+      const halo = ctx.createRadialGradient(sx, sy, R * 0.6, sx, sy, R * 3.4);
+      halo.addColorStop(0, rgba(GOLD, 0.16 * sunK)); halo.addColorStop(1, rgba(GOLD, 0));
+      ctx.fillStyle = halo; ctx.fillRect(0, 0, 1920, 1080);
+      ctx.lineWidth = 1.2;
+      for (let k = 0; k < 14; k++) { ctx.strokeStyle = rgba(GOLD, (0.75 - k * 0.05) * sunK); ctx.beginPath(); ctx.arc(sx, sy, R - k * 9, 0, Math.PI * 2); ctx.stroke(); }
+    }
+    traceFlow(t);
+    // ridges back to front
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    const pts = new Float32Array(NP * 2);
+    for (let r = NR - 1; r >= 0; r--) {
+      const z = ROWZ[r]; let ok = true;
+      for (let j = 0; j < NP; j++) { const pr = proj(c, -XR + 2 * XR * j / (NP - 1), HGT[r][j], z); if (!pr) { ok = false; break; } pts[j * 2] = pr[0]; pts[j * 2 + 1] = pr[1]; }
+      if (!ok) continue;
+      const depth = r / (NR - 1);
+      // occluding fill under the ridge (only once the landscape is solid)
+      if (solid > 0) {
+        ctx.fillStyle = `rgba(7,11,23,${solid})`;
+        ctx.beginPath(); ctx.moveTo(pts[0], 1200); for (let j = 0; j < NP; j++) ctx.lineTo(pts[j * 2], pts[j * 2 + 1]); ctx.lineTo(pts[(NP - 1) * 2], 1200); ctx.closePath(); ctx.fill();
+      }
+      // the 12 flow lines assigned to this ridge, morphing into it
+      ctx.globalCompositeOperation = solid > 0.98 ? 'source-over' : 'lighter';
+      const col = [lerp(GOLD[0], 120, depth * 0.7), lerp(GOLD[1], 150, depth * 0.6), lerp(GOLD[2], 210, depth * 0.5)];
+      const mr = morph(r * 12);
+      const fin = E.inOutSine(inv(0.8, 1, mr));                     // crossfade from coarse flow path to the full ridge
+      for (let k = 0; k < 12; k++) {
+        const i = r * 12 + k, m = morph(i), L = FL[i];
+        let a = (0.17 + 0.45 * m * (1 - depth * 0.6)) * (k === 0 ? 1 : 1 - m * 0.92);
+        a *= (1 - fin);
+        if (a < 0.004) continue;
+        ctx.strokeStyle = rgba(col, Math.min(1, a));
+        ctx.lineWidth = lerp(1.15, lerp(1.7, 0.7, depth), m);
+        ctx.beginPath();
+        const nn = Math.max(2, Math.floor(NS * grow));
+        for (let j = 0; j < nn; j++) {
+          const u = j / (NS - 1), qf = u * (NP - 1), q0 = Math.floor(qf), q1 = Math.min(NP - 1, q0 + 1), fr = qf - q0;
+          const rx = lerp(pts[q0 * 2], pts[q1 * 2], fr), ry = lerp(pts[q0 * 2 + 1], pts[q1 * 2 + 1], fr);
+          const off = (k - 5.5) * 6 * (1 - m);
+          const x = lerp(L[j * 2], rx, m), y = lerp(L[j * 2 + 1], ry + off, m);
+          j ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+        }
+        ctx.stroke();
+      }
+      if (fin > 0) {
+        ctx.strokeStyle = rgba(col, Math.min(1, (0.09 + 0.5 * (1 - depth * 0.6)) * 1.25 * fin));
+        ctx.lineWidth = lerp(1.7, 0.7, depth);
+        ctx.beginPath(); for (let q = 0; q < NP; q++) q ? ctx.lineTo(pts[q * 2], pts[q * 2 + 1]) : ctx.moveTo(pts[0], pts[1]); ctx.stroke();
+      }
+      ctx.globalCompositeOperation = 'source-over';
+    }
+    // the journey: one bright line walking the terrain to the far summit
+    const pk = E.inOutSine(inv(5.4, 8.1, t));
+    if (pk > 0) {
+      const path = [];
+      for (let si = 0; si <= 120; si++) { const s = si / 120;
+        const z = lerp(4.5, 32.5, s), x = lerp(-4.5, 8.2, E.inOutSine(s)) + 5.2 * Math.sin(s * 10.5) * Math.pow(1 - s, 1.3);
+        const hs = (height(x, z) * 2 + height(x - 0.5, z) + height(x + 0.5, z) + height(x, z - 0.5) + height(x, z + 0.5)) / 6;
+        const pr = proj(c, x, hs + 0.1, z); if (pr) path.push(pr);
+      }
+      const n = Math.floor(path.length * pk);
+      ctx.globalCompositeOperation = 'lighter';
+      for (const [w, a] of [[9, 0.06], [4, 0.16], [1.6, 0.95]]) {
+        ctx.lineWidth = w; ctx.strokeStyle = `rgba(255,236,196,${a})`; ctx.beginPath();
+        for (let j = 0; j < n; j++) j ? ctx.lineTo(path[j][0], path[j][1]) : ctx.moveTo(path[j][0], path[j][1]);
+        ctx.stroke();
+      }
+      if (n > 0 && pk < 1) {
+        const [hx, hy] = path[n - 1];
+        const gl = ctx.createRadialGradient(hx, hy, 0, hx, hy, 46);
+        gl.addColorStop(0, 'rgba(255,244,220,.95)'); gl.addColorStop(0.15, 'rgba(255,220,160,.5)'); gl.addColorStop(1, 'rgba(255,200,120,0)');
+        ctx.fillStyle = gl; ctx.fillRect(hx - 50, hy - 50, 100, 100);
+      }
+      if (pk >= 1) {   // arrival flare at the summit
+        const [hx, hy] = path[path.length - 1], f = Math.exp(-(t - 8.1) * 2.2);
+        const gl = ctx.createRadialGradient(hx, hy, 0, hx, hy, 90);
+        gl.addColorStop(0, `rgba(255,244,220,${0.9 * f + 0.3})`); gl.addColorStop(1, 'rgba(255,200,120,0)');
+        ctx.fillStyle = gl; ctx.fillRect(hx - 100, hy - 100, 200, 200);
+      }
+      ctx.globalCompositeOperation = 'source-over';
+    }
+    // title
+    const tk = E.outCubic(inv(6.4, 7.6, t));
+    if (tk > 0) {
+      ctx.save();
+      ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+      ctx.font = '200 150px "Noto Serif CJK SC"';
+      ctx.shadowColor = 'rgba(255,214,150,.55)'; ctx.shadowBlur = 30;
+      ctx.fillStyle = `rgba(250,234,206,${tk})`;
+      const ls = lerp(0.5, 0.32, tk) * 150;
+      const txt = [...C.title]; const tw = txt.length * 150 + (txt.length - 1) * ls;
+      txt.forEach((ch, i) => ctx.fillText(ch, 560 - tw / 2 + 75 + i * (150 + ls), 300));
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = `rgba(232,196,128,${0.85 * tk})`; ctx.fillRect(560 - 150 * tk, 338, 300 * tk, 1.4);
+      ctx.font = '300 20px Inter'; ctx.fillStyle = `rgba(232,214,180,${0.75 * tk})`;
+      ctx.letterSpacing = '6px'; ctx.fillText(C.sub, 563, 382); ctx.letterSpacing = '0px';
+      ctx.restore();
+    }
+    // finishing: vignette + grain (grain fixed per frame so supersampled sub-frames keep it)
+    const v = ctx.createRadialGradient(960, 540, 420, 960, 540, 1180);
+    v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,.55)');
+    ctx.fillStyle = v; ctx.fillRect(0, 0, 1920, 1080);
+    const fr = Math.floor(t * 30);
+    ctx.globalAlpha = 0.6; ctx.drawImage(grain, (fr * 97) % 640 - 640, (fr * 61) % 360 - 360, 1920 + 640, 1080 + 360); ctx.globalAlpha = 1;
+    // fade in from black
+    if (t < 0.4) { ctx.fillStyle = `rgba(5,8,17,${1 - t / 0.4})`; ctx.fillRect(0, 0, 1920, 1080); }
+  },
+});
+</script></body></html>

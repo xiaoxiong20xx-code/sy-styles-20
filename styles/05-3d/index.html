@@ -1,0 +1,263 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>05 3D 渲染 · Studio Render</title>
+<script src="../../lib/core.js"></script><script src="../../lib/gl.js"></script><script src="../../lib/rm.js"></script>
+<style>
+  #cap{position:absolute;left:0;right:0;top:70px;text-align:center;font-family:'Noto Sans CJK SC';font-weight:900;font-size:70px;color:#3b2230;letter-spacing:.1em;padding-left:.1em}
+  #cap small{display:block;font:500 20px Inter;letter-spacing:.6em;padding-left:.6em;color:rgba(59,34,48,.55);margin-top:16px}
+</style>
+</head><body><div id="stage"></div>
+<script>
+/* ===== 05 3D 渲染 · Studio Render =====
+   A pastel studio. Candy blocks drop in and settle into a podium, a gold ring rolls in and spirals down
+   like Euler's disk, glass marbles roll past, and a chrome ball lands on top. Raymarched: soft area-light
+   shadows, AO, clear-coat reflections, gold, refractive glass with a caustic, depth of field. */
+const { E, clamp, inv, lerp, spring } = Reel;
+const stage = Reel.makeStage('#f2dfe4');
+Reel.ownJitter = true;
+const C = Reel.cfg({ cap: '质感，自己会说话', capEn: 'SOFT · GLOSSY · REAL' });
+
+const rm = Reel.RM(stage, {
+  bloom: 0.24, th: 1.3, expo: 0.95, vig: 0.32, grain: 0.022, ca: 0.35, contrast: 1.08, sat: 1.08, bands: 8,
+  uniforms: `
+uniform vec4 uB[3]; uniform vec4 uBS[3];      // blocks: pos+squash, half size + yaw
+uniform vec4 uBall;                            // chrome ball: pos, r
+uniform vec4 uRing; uniform vec4 uRingO;       // ring centre; tilt, precession, R, r
+uniform vec4 uM[2];                            // glass marbles: pos, r
+uniform vec3 uRo, uTa; uniform float uFade;`,
+  scene: `
+const vec3 COLS[3] = vec3[3](vec3(1.,.66,.1), vec3(.98,.24,.46), vec3(.12,.6,.92));
+const float W = 3.4, RC = 1.9;                  // cyc: back wall distance, fillet radius
+float sdCyc(vec3 p){
+  vec2 q = vec2(p.y, p.z + W);
+  if (q.x < RC && q.y < RC) return RC - length(q - vec2(RC));
+  return min(q.x, q.y);
+}
+float sdBlock(vec3 p, int i){
+  vec4 a = uB[i], s = uBS[i];
+  vec3 q = p - a.xyz; q = rotY(-s.w) * q;
+  float sq = a.w; q.y += s.y * (1. - sq); q.y /= sq; q.xz *= sqrt(sq);       // squash about the base
+  return sdRoundBox(q, s.xyz, .12) * min(sq, 1.);
+}
+float sdRing(vec3 p){
+  vec3 q = p - uRing.xyz;
+  q = rotY(uRingO.y) * q; q = rotZ(-uRingO.x) * q;
+  return sdTorus(q, uRingO.zw);
+}
+// returns (distance, material): 0 cyc, 1-3 blocks, 4 chrome, 5 gold, 6 glass
+vec2 map(vec3 p){
+  vec2 d = vec2(sdCyc(p), 0.);
+  for (int i=0;i<3;i++){ if (length(p - uB[i].xyz) - length(uBS[i].xyz)*1.25 - .1 < d.x) { float b = sdBlock(p, i); if (b < d.x) d = vec2(b, float(i+1)); } }
+  float s = length(p - uBall.xyz) - uBall.w; if (s < d.x) d = vec2(s, 4.);
+  if (length(p - uRing.xyz) - uRingO.z - uRingO.w - .05 < d.x) { float r = sdRing(p); if (r < d.x) d = vec2(r, 5.); }
+  for (int i=0;i<2;i++){ float m = length(p - uM[i].xyz) - uM[i].w; if (m < d.x) d = vec2(m, 6.); }
+  return d;
+}
+float mapS(vec3 p){ return map(p).x; }
+vec3 nrm(vec3 p){ const vec2 k = vec2(1.,-1.)*.0007;
+  return normalize(k.xyy*mapS(p+k.xyy) + k.yyx*mapS(p+k.yyx) + k.yxy*mapS(p+k.yxy) + k.xxx*mapS(p+k.xxx)); }
+vec2 march(vec3 ro, vec3 rd, int steps, float tmax){
+  float t = .002;
+  for (int i=0;i<160;i++){ if (i>=steps) break; vec2 h = map(ro + rd*t); if (abs(h.x) < .0004 + .0006*t) return vec2(t, h.y); t += h.x*.92; if (t > tmax) break; }
+  return vec2(-1.);
+}
+const vec3 LDIR = normalize(vec3(-.55,.82,.5));
+float shadow(vec3 ro){
+  float res = 1., t = .02;
+  for (int i=0;i<32;i++){ vec3 p = ro + LDIR*t; vec2 h = map(p); float k = h.y > 5.5 ? .6 : 0.;   // glass lets light through
+    res = min(res, mix(5.5*h.x/t, 1., k)); t += clamp(h.x, .03, .45); if (res < .002 || t > 7.) break; }
+  return clamp(res, 0., 1.);
+}
+float ao(vec3 p, vec3 n){ float o = 0., s = 1.;
+  for (int i=0;i<5;i++){ float h = .02 + .13*float(i); o += (h - mapS(p + n*h)) * s; s *= .72; } return clamp(1. - 2.1*o, 0., 1.); }
+float caustic(vec3 p){                       // light focused by the glass marbles onto what is behind them
+  float c = 0.;
+  for (int i=0;i<2;i++){ vec3 m = uM[i].xyz; vec3 v = p - m; float along = dot(v, -LDIR);
+    if (along > 0.) { float dperp = length(v + LDIR*along); float f = uM[i].w * .32;
+      c += 2.2 * exp(-pow(dperp / f, 2.)) * smoothstep(0., uM[i].w*1.4, along); } }
+  return c;
+}
+float rectL(vec3 r, vec3 c, vec3 up, vec2 hs, float soft){
+  float cz = dot(r, c); if (cz <= 0.) return 0.;
+  vec3 u = normalize(cross(up, c)), v = cross(c, u); vec2 q = vec2(dot(r,u), dot(r,v)) / cz;
+  vec2 e = smoothstep(hs + soft, hs - soft, abs(q)); return e.x * e.y;
+}
+vec3 envRefl(vec3 r){                        // what glossy things see when the ray leaves the set
+  vec3 c = mix(vec3(.85,.66,.72), vec3(1.,.93,.95), smoothstep(-.2,.8,r.y)) * .9;
+  c += vec3(1.,.97,.93) * 13. * rectL(r, LDIR, vec3(0.,1.,0.), vec2(.42,.3), .08);
+  c += vec3(.9,.95,1.) * 4. * rectL(r, normalize(vec3(.75,.35,-.55)), vec3(0.,1.,0.), vec2(.05,.6), .04);
+  c *= 1. - .82 * rectL(r, normalize(vec3(.95,.12,.45)), vec3(0.,1.,0.), vec2(.38,.5), .2);      // black flag: negative fill so metal reads as metal
+  c *= 1. - .6 * rectL(r, normalize(vec3(-.9,.05,.6)), vec3(0.,1.,0.), vec2(.25,.35), .2);
+  return c;
+}
+vec3 albedo(float m, vec3 p){
+  if (m < .5) { return mix(vec3(.72,.47,.56), vec3(.84,.62,.69), smoothstep(-.5, 2.8, p.y)) * (.96 + .08 * fbm(p*1.7)); }
+  if (m < 3.5) return COLS[int(m) - 1];
+  return vec3(1.);
+}
+// diffuse + clear-coat lighting for matte/candy surfaces (no recursion)
+float gSh = 1.;
+vec3 lightDiffuse(vec3 p, vec3 n, vec3 rd, float m){
+  vec3 a = albedo(m, p);
+  float sh = shadow(p + n*.004); gSh = sh;
+  float dif = clamp(dot(n, LDIR), 0., 1.);
+  float wrap = clamp((dot(n, LDIR) + .35) / 1.35, 0., 1.);                // soft subsurface-ish wrap for candy
+  float oc = ao(p, n);
+  float pool = mix(.62, 1.18, exp(-dot(p.xz - vec2(-.2,.5), p.xz - vec2(-.2,.5)) * .09));   // softbox falloff
+  vec3 col = a * vec3(1.,.95,.88) * 1.7 * pool * mix(dif, wrap, m > .5 && m < 3.5 ? .45 : 0.) * sh;
+  col += a * vec3(.86,.8,.9) * .3 * oc * (.6 + .4*n.y);                        // sky
+  col += a * vec3(.72,.8,1.) * .42 * oc * clamp(dot(n, normalize(vec3(.75,.32,.6))), 0., 1.);   // cool fill, camera right
+  col += vec3(1.,.9,.85) * .5 * oc * pow(clamp(dot(n, normalize(vec3(-.3,.55,-.78))), 0., 1.), 2.) * (m > .5 ? 1. : 0.);  // warm rim
+  if (m > .5 && m < 3.5) col += a * a * .5 * pow(1. - clamp(dot(n, -rd), 0., 1.), 2.2) * (.4 + .6*sh);   // candy translucency at the edges
+  col += a * vec3(.95,.62,.7) * .22 * oc * clamp(-n.y*.5 + .5, 0., 1.) * (m > .5 ? 1. : .2);   // pink bounce from the floor
+  col += vec3(1.,.97,.93) * caustic(p) * sh * (m < .5 ? 1. : .4);
+  return col;
+}
+vec3 shadeSimple(vec3 p, vec3 rd, float m){
+  vec3 n = nrm(p);
+  if (m > 3.5 && m < 5.5) { vec3 r = reflect(rd, n); return envRefl(r) * (m > 4.5 ? vec3(1.,.74,.32) : vec3(.95)); }
+  if (m > 5.5) return envRefl(reflect(rd, n)) * .3 + vec3(.9,.95,1.) * .25;
+  return lightDiffuse(p, n, rd, m);
+}
+vec3 trace1(vec3 ro, vec3 rd){                // one bounce
+  vec2 h = march(ro, rd, 90, 14.);
+  if (h.x < 0.) return envRefl(rd);
+  return shadeSimple(ro + rd*h.x, rd, h.y);
+}
+vec3 shade(vec3 p, vec3 rd, float m, float tHit){
+  vec3 n = nrm(p);
+  if (m > .5 && m < 3.5) n = normalize(n + .022 * (vec3(vnoise(p*38.), vnoise(p*38. + 7.1), vnoise(p*38. + 13.7)) - .5));   // micro surface
+  float cosT = max(dot(n, -rd), 0.);
+  if (m < 3.5) {                                // cyc + candy blocks (clear coat)
+    vec3 col = lightDiffuse(p, n, rd, m);
+    float shP = gSh;
+    if (m > .5) {
+      float F = schlick(cosT, .045);
+      vec3 r = reflect(rd, n);
+      vec3 rc = F > .07 ? trace1(p + n*.004, r) : envRefl(r);   // full bounce only where the clear coat is a real mirror
+      col = col * (1. - F) + rc * F;
+      vec3 hv = normalize(LDIR - rd); col += vec3(1.,.97,.93) * pow(max(dot(n, hv), 0.), 90.) * 3. * shP;
+    }
+    return col;
+  }
+  if (m < 5.5) {                                // chrome / gold
+    vec3 F0 = m < 4.5 ? vec3(.96,.95,.93) : vec3(1.,.76,.33);
+    vec3 F = F0 + (1. - F0) * pow(1. - cosT, 5.);
+    vec3 r = reflect(rd, n);
+    vec3 refl = trace1(p + n*.004, r);
+    if (m > 4.5) refl = mix(refl, envRefl(r), .25);   // a touch of brushed roughness on the gold
+    return refl * F * (.55 + .45 * ao(p, n));
+  }
+  // glass marble: reflection + refraction through the sphere
+  int mi = length(p - uM[0].xyz) < length(p - uM[1].xyz) ? 0 : 1;
+  vec3 c = uM[mi].xyz; float R = uM[mi].w;
+  float F = schlick(cosT, .04);
+  vec3 refl = trace1(p + n*.004, reflect(rd, n));
+  vec3 t1 = refract(rd, n, 1./1.52);
+  // exit point of the inner ray
+  vec3 oc = p - c; float b = dot(oc, t1); float cc = dot(oc, oc) - R*R; float tex = -b + sqrt(max(b*b - cc, 0.));
+  vec3 pe = p + t1 * tex; vec3 ne = normalize(pe - c);
+  vec3 t2 = refract(t1, -ne, 1.52); if (dot(t2,t2) < .01) t2 = reflect(t1, -ne);
+  vec3 trans = trace1(pe + t2*.004, t2) * vec3(.93,.98,.97);
+  return mix(trans, refl, F) + vec3(1.) * pow(max(dot(reflect(rd, n), LDIR), 0.), 300.) * 4.;
+}
+vec3 render(vec2 fc){
+  vec2 uv = (2.*fc - uRes) / uRes.y;
+  vec3 ro = uRo;
+  vec3 rd = camMat(ro, uTa, 0.) * normalize(vec3(uv, 2.6));
+  vec2 h = march(ro, rd, 160, 30.);
+  vec3 col;
+  if (h.x < 0.) { col = vec3(.7,.55,.6); gDepth = 30.; }
+  else { vec3 p = ro + rd*h.x; col = shade(p, rd, h.y, h.x); gDepth = h.x; }
+  return col * uFade;
+}`,
+});
+
+/* ---------------- choreography ---------------- */
+// drop with bounces: returns [height above rest, squash factor]
+function drop(t, t0, h0, e = 0.36, g = 30) {
+  if (t < t0) return [h0 + 30, 1];
+  const tf = Math.sqrt(2 * h0 / g);
+  let s = t - t0;
+  if (s < tf) return [h0 - 0.5 * g * s * s, 1 + 0.1 * (s / tf) ** 2];
+  s -= tf; let v = g * tf * e;
+  const imp = (dt, amp) => amp * Math.exp(-Math.pow(dt / 0.055, 2));
+  let sq = 1 - imp(s, 0.22);
+  for (let b = 0; b < 4; b++) {
+    const dur = 2 * v / g;
+    if (s < dur) return [v * s - 0.5 * g * s * s, sq];
+    s -= dur; sq = 1 - imp(s, 0.16 * Math.pow(e, b + 1)); v *= e;
+  }
+  return [0, sq];
+}
+const BLK = [
+  { t0: 0.45, x: -0.88, z: 0.06, hx: 0.42, hy: 0.4, yaw: 0.06 },     // yellow (left, 2nd)
+  { t0: 1.95, x: 0.0, z: 0.0, hx: 0.42, hy: 0.62, yaw: -0.03 },      // pink (centre, 1st)
+  { t0: 1.2, x: 0.88, z: -0.04, hx: 0.42, hy: 0.28, yaw: 0.05 },     // cyan (right, 3rd)
+];
+const RING = { R: 0.36, r: 0.075, cx: 0.62, cz: 1.35 };
+function ringState(t) {
+  // roll in upright from the right (2.5-3.4), then spiral down like Euler's disk (3.4-5.7), rattle flat
+  const { R, r } = RING;
+  if (t < 2.5) return { pos: [9, 0, 0], tilt: 1.45, prec: 0 };
+  if (t < 3.4) {
+    const u = (t - 2.5) / 0.9, x = lerp(3.4, RING.cx, E.outCubic(u));
+    const tilt = 1.48 - 0.12 * E.inQuad(u);
+    return { pos: [x, R * Math.sin(tilt) + r, RING.cz], tilt, prec: 0.08 * Math.sin(u * 7) };
+  }
+  const u = clamp((t - 3.4) / 2.3);
+  let tilt = 1.36 * Math.pow(1 - u, 0.62);
+  let prec = 0;   // precession accelerates as the ring flattens: dphi/dt ~ 1/sqrt(tilt)
+  const N = 60; for (let i = 0; i < N; i++) { const uu = (i + 0.5) / N * u, th = 1.36 * Math.pow(1 - uu, 0.62); prec += (2.4 / Math.sqrt(Math.max(th, 0.035))) * (u * 2.3 / N); }
+  if (u >= 1) { const w = t - 5.7; tilt = 0.035 * Math.exp(-w * 7) * Math.abs(Math.sin(w * 30)); }
+  return { pos: [RING.cx, R * Math.sin(tilt) + r * Math.cos(tilt), RING.cz], tilt, prec };
+}
+function marble(t, t0, x0, x1, z, r) {
+  if (t < t0) return [-30, r, z, r];
+  const u = clamp((t - t0) / 2.2);
+  return [lerp(x0, x1, E.outCubic(u)), r, z, r];
+}
+
+const KEYS = [
+  { t: 0.0, p: [0.75, 0.95, 4.9], a: [0.0, 0.55, 0.0], ap: 6, f: [0, 0.5, 0] },
+  { t: 2.35, p: [0.35, 0.95, 4.5], a: [0.0, 0.62, 0.1], ap: 6, f: [0, 0.6, 0] },
+  { t: 3.3, p: [1.6, 0.5, 3.85], a: [0.52, 0.3, 1.2], ap: 13, f: [0.62, 0.3, 1.35] },
+  { t: 5.4, p: [1.15, 0.42, 3.55], a: [0.48, 0.2, 1.2], ap: 14, f: [0.62, 0.15, 1.35] },
+  { t: 6.9, p: [0.2, 1.3, 4.6], a: [0.0, 0.9, 0.1], ap: 7, f: [0, 1.0, 0.2] },
+  { t: 10.0, p: [-0.12, 1.38, 4.3], a: [0.0, 0.88, 0.1], ap: 7, f: [0, 1.0, 0.2] },
+];
+const cr1 = (p0, p1, p2, p3, u) => { const u2 = u * u, u3 = u2 * u; return 0.5 * ((2 * p1) + (-p0 + p2) * u + (2 * p0 - 5 * p1 + 4 * p2 - p3) * u2 + (-p0 + 3 * p1 - 3 * p2 + p3) * u3); };
+function camAt(t) {
+  let i = 0; while (i < KEYS.length - 2 && t > KEYS[i + 1].t) i++;
+  const k0 = KEYS[Math.max(0, i - 1)], k1 = KEYS[i], k2 = KEYS[i + 1], k3 = KEYS[Math.min(KEYS.length - 1, i + 2)];
+  const u = E.inOutSine(clamp((t - k1.t) / (k2.t - k1.t)));
+  const f = (key) => [0, 1, 2].map((j) => cr1(k0[key][j], k1[key][j], k2[key][j], k3[key][j], u));
+  return { p: f('p'), a: f('a'), f: f('f'), ap: lerp(k1.ap, k2.ap, u) };
+}
+
+const cap = document.createElement('div'); cap.id = 'cap'; cap.innerHTML = `${C.cap}<small>${C.capEn}</small>`; stage.appendChild(cap);
+
+Reel.scene({
+  duration: 10, fps: 30,
+  fonts: ['900 70px "Noto Sans CJK SC"', '500 20px Inter'],
+  cues: [{ t: 0.82, sfx: 'thud' }, { t: 1.57, sfx: 'thud' }, { t: 2.42, sfx: 'thud' }, { t: 2.55, sfx: 'roll' }, { t: 3.4, sfx: 'clink' },
+    { t: 5.7, sfx: 'clink' }, { t: 6.0, sfx: 'whoosh' }, { t: 6.22, sfx: 'clink' }, { t: 7.0, sfx: 'swell' }],
+  render(t) {
+    const B = new Float32Array(12), BS = new Float32Array(12);
+    BLK.forEach((b, i) => { const [y, sq] = drop(t, b.t0, 4.2); B.set([b.x, b.hy + y, b.z, sq], i * 4); BS.set([b.hx, b.hy, b.hx, b.yaw], i * 4); });
+    // chrome ball lands on the pink block
+    const [by] = drop(t, 5.75, 3.2, 0.42, 26);
+    const ball = [0.02, 1.24 + 0.36 + by, 0.02, 0.36];
+    const rg = ringState(t);
+    const M = new Float32Array([...marble(t, 3.0, -3.6, -1.55, 1.05, 0.2), ...marble(t, 3.55, -3.8, -1.12, 1.62, 0.15)]);
+    const cam = camAt(t);
+    const hx = 0.01 * Math.sin(t * 1.1) + 0.005 * Math.sin(t * 2.7 + 1), hy = 0.007 * Math.sin(t * 1.5 + 2);
+    const ro = [cam.p[0] + hx, cam.p[1] + hy, cam.p[2]];
+    const fd = Math.hypot(ro[0] - cam.f[0], ro[1] - cam.f[1], ro[2] - cam.f[2]);
+    rm.set('uB', B).set('uBS', BS).set('uBall', ball).set('uRing', [...rg.pos, 0]).set('uRingO', [rg.tilt, rg.prec, RING.R, RING.r])
+      .set('uM', M).set('uRo', ro).set('uTa', cam.a).set('uFade', E.outCubic(clamp(t / 0.4)));
+    rm.render(t, { focus: fd, aperture: cam.ap, maxCoc: 14 });
+    const ca = E.outCubic(inv(6.9, 7.7, t));
+    cap.style.opacity = ca; cap.style.transform = `translateY(${(1 - ca) * -16}px)`;
+  },
+});
+</script></body></html>

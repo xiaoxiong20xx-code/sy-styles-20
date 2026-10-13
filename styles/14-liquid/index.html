@@ -1,0 +1,322 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>14 液态流动 · Liquid Chrome</title>
+<script src="../../lib/core.js"></script><script src="../../lib/gl.js"></script><script src="../../lib/rm.js"></script>
+<style>
+  #cap{position:absolute;left:0;right:0;bottom:92px;text-align:center;font:200 30px 'Inter Display';letter-spacing:.62em;padding-left:.62em;color:rgba(235,232,255,.78)}
+  #cap b{font-weight:600;color:#fff}
+</style>
+</head><body><div id="stage"></div>
+<script>
+/* ===== 14 液态流动 · Liquid Chrome =====
+   One continuous macro shot. A drop of liquid metal falls, crowns on impact, more drops rain in and merge with
+   surface tension, the pool gathers and rises into a column, snaps into a floating play-symbol, throws off
+   satellites that orbit back, and catches a light sweep. SDF raymarching + reflections + depth of field. */
+const { E, clamp, inv, lerp, spring } = Reel;
+const stage = Reel.makeStage('#030305');
+Reel.ownJitter = true;
+const C = Reel.cfg({ cap: 'LIQUID <b>CHROME</b>' });
+
+const NE = 18;
+const rm = Reel.RM(stage, {
+  bloom: 0.42, th: 1.4, expo: 1.12, vig: 0.42, grain: 0.028, ca: 0.6, contrast: 1.04, sat: 1.04, bands: 8,
+  uniforms: `
+uniform vec4 uE[${NE}]; uniform vec4 uR[${NE}]; uniform int uN;
+uniform vec4 uS[4]; uniform int uNS;
+uniform vec4 uCol; uniform vec2 uSway; uniform vec4 uCr;
+uniform float uMorph, uK, uIrid, uFade, uStep, uColK;
+uniform vec4 uPr; uniform vec3 uRo, uTa; uniform vec2 uSweep;
+uniform vec3 uBMin, uBMax;`,
+  scene: `
+float crown(vec3 p){
+  float r = length(p.xz), th = atan(p.z, p.x);
+  float top = uCr.y * (.72 + .28*cos(9.*th));
+  float wall = abs(r - uCr.x) - uCr.z * (1.15 - .75*clamp(p.y / max(top, 1e-3), 0., 1.));
+  return max(max(wall, p.y - top), -p.y - .05) * .8;
+}
+float mapL(vec3 p){
+  float d = 1e3;
+  for (int i=0;i<${NE};i++){ if(i>=uN) break;
+    vec4 a = uE[i], r = uR[i]; vec3 q = p - a.xyz;
+    float e = sdEllipsoid(q, r.xyz);
+    if (r.w > 0.) { float rho = length(q.xz); e -= r.w * sin(rho*19. - a.w) * smoothstep(1.3, .05, rho); }
+    d = smin(d, e, uK);
+  }
+  if (uCr.w > 0.) d = smin(d, crown(p - vec3(0., 0., .05)), .08);
+  if (uCol.w > 0.) {
+    float H = uCol.x; vec3 q = p; float s = clamp((q.y - uCol.z) / max(H - uCol.z, 1e-3), 0., 1.);
+    q.xz -= uSway * s * s;
+    d = smin(d, sdCapsule(q, vec3(0., uCol.z, 0.), vec3(0., H, 0.), uCol.y * (1. - .2*s)), uColK);
+  }
+  if (uMorph > 0.) {
+    vec3 q = p - vec3(0., uPr.x, 0.); q = rotX(.2) * (rotY(-uPr.y) * q);
+    float tri = sdTri2(vec2(-q.y, q.x), uPr.z - .13) - .13;
+    float pr = extrude(tri, q.z, uPr.w) - .075;
+    d = mix(d, pr, uMorph);
+  }
+  for (int i=0;i<4;i++){ if(i>=uNS) break; d = smin(d, length(p - uS[i].xyz) - uS[i].w, .32); }
+  return d;
+}
+vec3 nrm(vec3 p){ const vec2 k = vec2(1.,-1.)*.0008;
+  return normalize(k.xyy*mapL(p+k.xyy) + k.yyx*mapL(p+k.yyx) + k.yxy*mapL(p+k.yxy) + k.xxx*mapL(p+k.xxx)); }
+vec2 boxHit(vec3 ro, vec3 rd){ vec3 iv = 1./rd; vec3 t0 = (uBMin-ro)*iv, t1 = (uBMax-ro)*iv;
+  vec3 a = min(t0,t1), b = max(t0,t1); return vec2(max(max(a.x,a.y),a.z), min(min(b.x,b.y),b.z)); }
+float marchL(vec3 ro, vec3 rd, int steps){
+  vec2 bb = boxHit(ro, rd); if (bb.y < max(bb.x, 0.)) return -1.;
+  float t = max(bb.x, 0.);
+  for (int i=0;i<140;i++){ if(i>=steps) break; float h = mapL(ro + rd*t); if (h < .0005 + .0007*t) return t; t += h*uStep; if (t > bb.y) break; }
+  return -1.;
+}
+float rectL(vec3 r, vec3 c, vec3 up, vec2 hs, float soft){
+  float cz = dot(r, c); if (cz <= 0.) return 0.;
+  vec3 u = normalize(cross(up, c)), v = cross(c, u); vec2 q = vec2(dot(r,u), dot(r,v)) / cz;
+  vec2 e = smoothstep(hs + soft, hs - soft, abs(q)); return e.x * e.y;
+}
+// studio: big overhead softbox, two strip lights (cool / magenta), a soft frontal bounce, a moving sweep bar
+vec3 env(vec3 r){
+  vec3 c = mix(vec3(.004,.004,.007), vec3(.016,.014,.026), smoothstep(-.25, .8, r.y));
+  c += vec3(1.,.96,.9) * 2.6 * rectL(r, normalize(vec3(0.,1.,.4)), vec3(0.,0.,1.), vec2(.8,.36), .2);
+  c += vec3(.7,.84,1.) * 2.4 * rectL(r, normalize(vec3(-1.,.25,.3)), vec3(0.,1.,0.), vec2(.075,.75), .06);
+  c += vec3(1.,.38,.9) * 2.1 * rectL(r, normalize(vec3(1.,.2,-.1)), vec3(0.,1.,0.), vec2(.065,.65), .06);
+  { vec3 fc = normalize(vec3(-.12,.34,1.)); float cz = dot(r, fc);
+    if (cz > 0.) { vec3 u = normalize(cross(vec3(0.,1.,0.), fc)), v = cross(fc, u); vec2 q = vec2(dot(r,u), dot(r,v)) / cz;
+      vec2 e = smoothstep(vec2(.5,.36) + .12, vec2(.5,.36) - .12, abs(q));
+      c += vec3(.92,.9,1.) * .85 * e.x * e.y * (.04 + .96 * smoothstep(-.3, .42, q.y)); } }
+  c += vec3(.38,.26,.9) * .5 * smoothstep(.3, 1., dot(r, normalize(vec3(0.,.25,-1.))));
+  if (uSweep.y > 0.) { vec3 sd = normalize(vec3(sin(uSweep.x), .14, cos(uSweep.x)));
+    c += vec3(1.,.98,.95) * uSweep.y * rectL(r, sd, vec3(0.,1.,0.), vec2(.03,1.2), .03); }
+  return c;
+}
+vec3 backdrop(vec3 rd){
+  vec3 c = mix(vec3(.0032,.0032,.0055), vec3(.0075,.0065,.013), smoothstep(-.1, .55, rd.y));
+  float g = exp(-pow(length(rd.xz - normalize(-uRo.xz)) / .55, 2.)) * smoothstep(-.1, .3, rd.y);
+  return c + vec3(.014,.009,.028) * g;
+}
+float floorShadow(vec3 p){
+  vec3 L = normalize(vec3(0.,1.,.4)); float s = 1.;
+  s *= clamp(mapL(p + L*.06) / .05, 0., 1.);
+  s *= clamp(.25 + .75 * mapL(p + L*.28) / .25, 0., 1.);
+  s *= clamp(.45 + .55 * mapL(p + L*.75) / .7, 0., 1.);
+  return s;
+}
+vec3 floorBase(vec3 p){
+  float r2 = dot(p.xz, p.xz);
+  float mot = .82 + .18 * fbm(vec3(p.xz*1.3, 0.));          // faint surface variation (not a perfect CG plane)
+  return (vec3(.003,.003,.0045) + vec3(.021,.02,.027) * exp(-r2*.4) + vec3(.006,.004,.012) * exp(-r2*.09)) * mot;
+}
+vec3 floorInReflection(vec3 p, vec3 r){
+  float tf = -p.y / r.y; vec3 fp = p + r*tf;
+  return floorBase(fp) * mix(.35, 1., floorShadow(fp)) * 1.6 + vec3(.05,.045,.06) * exp(-tf*1.2);
+}
+vec3 shadeChrome(vec3 p, vec3 rd, vec3 n, bool bounce){
+  vec3 r = reflect(rd, n);
+  float cosT = max(dot(n, -rd), 0.);
+  float th = fbm(p*1.6 + vec3(0., uTime*.12, 0.))*1.1 + cosT*.6 + .18;
+  vec3 tint = mix(vec3(1.), thinFilm(th)*1.2, uIrid * (.15 + .85 * pow(1. - cosT, 1.4)));
+  vec3 F0 = vec3(.97,.955,.93) * tint;
+  vec3 F = F0 + (1. - F0) * pow(1. - cosT, 5.);
+  vec3 refl;
+  float t2 = bounce ? marchL(p + n*.012, r, 40) : -1.;
+  if (t2 > 0.) {
+    vec3 p2 = p + n*.012 + r*t2; vec3 n2 = nrm(p2); vec3 r2 = reflect(r, n2);
+    refl = (r2.y < 0. ? floorInReflection(p2, r2) : env(r2)) * vec3(.95,.94,.92);
+  } else {
+    // glossy-ish transition between floor and studio in the reflection (no razor horizon on flat faces)
+    vec3 fl = r.y < .06 ? floorInReflection(p, vec3(r.x, min(r.y, -.02), r.z)) : vec3(0.);
+    refl = mix(fl, env(r), smoothstep(-.12, .06, r.y));
+  }
+  float ao = clamp(.45 + .55 * mapL(p + n*.14) / .14, 0., 1.);
+  return refl * F * ao;
+}
+vec3 render(vec2 fc){
+  vec2 uv = (2.*fc - uRes) / uRes.y;
+  vec3 ro = uRo;
+  vec3 rd = camMat(ro, uTa, 0.) * normalize(vec3(uv, 2.9));
+  float t = marchL(ro, rd, 120);
+  float tf = rd.y < 0. ? -ro.y / rd.y : 1e9;
+  vec3 col;
+  if (t > 0. && t < tf) {
+    vec3 p = ro + rd*t; col = shadeChrome(p, rd, nrm(p), true); gDepth = t;
+  } else if (tf < 1e8) {
+    vec3 p = ro + rd*tf; gDepth = tf;
+    float sh = floorShadow(p);
+    vec3 c = floorBase(p) * mix(.2, 1., sh);
+    vec3 rr = reflect(rd, vec3(0.,1.,0.));
+    float tr = marchL(p + vec3(0.,.002,0.), rr, 64);
+    float fr = .05 + .95 * pow(1. - max(-rd.y, 0.), 5.);
+    if (tr > 0.) { vec3 q = p + rr*tr; c += shadeChrome(q, rr, nrm(q), false) * mix(.3, .68, fr) * exp(-tr*.6); }
+    else c += env(rr) * .022;
+    col = mix(c, backdrop(rd), smoothstep(3.2, 9., length(p.xz)));
+  } else { col = backdrop(rd); gDepth = 60.; }
+  return col * uFade;
+}`,
+});
+
+/* ---------------- timeline: simulation runs on a speed-ramped clock ----------------
+   real 0.25->0.45 slows to 0.22x (high-speed camera look) for the impact and crown, ramps back to 1x by 2.05s. */
+function simTime(t) {
+  if (t <= 0.25) return t;
+  if (t <= 0.45) { const u = t - 0.25; return 0.25 + u - 0.78 * u * u / (2 * 0.2); }
+  if (t <= 1.45) return 0.372 + 0.22 * (t - 0.45);
+  if (t <= 2.05) { const u = t - 1.45; return 0.592 + 0.22 * u + 0.78 * u * u / (2 * 0.6); }
+  return 0.958 + (t - 2.05);
+}
+const G = 22, Y0 = 4.6;
+const DROPS = [
+  { ts: -0.172, x: 0.0, z: 0.05, r: 0.34, splash: true },
+  { ts: 0.523, x: -1.32, z: -0.32, r: 0.27 },
+  { ts: 0.792, x: 1.24, z: 0.18, r: 0.25 },
+  { ts: 1.017, x: -0.52, z: 0.62, r: 0.2 },
+  { ts: 1.246, x: 0.66, z: -0.66, r: 0.19 },
+];
+const SPL = Array.from({ length: 9 }, (_, i) => ({ a: i / 9 * Math.PI * 2, vh: 1.25 + ((i * 37) % 5) * 0.13, vy: 2.5 + ((i * 53) % 4) * 0.2, r: 0.04 + ((i * 29) % 3) * 0.011 }));
+const tHit = (d) => d.ts + Math.sqrt(2 * (Y0 - d.r) / G);
+const bump = (t, a, b) => (t <= a || t >= b ? 0 : Math.sin(Math.PI * (t - a) / (b - a)));
+const GATHER = [2.25, 3.2], RISE = 3.2, MORPH = [3.95, 4.8];
+const T0 = tHit(DROPS[0]);
+
+function frameState(tr) {
+  const t = simTime(tr);
+  const E_ = [], R_ = [];
+  const push = (x, y, z, rx, ry, rz, amp = 0, ph = 0) => { E_.push(x, y, z, ph); R_.push(rx, ry, rz, amp); };
+  const gk = (i) => E.inOutCubic(inv(GATHER[0] + i * 0.06, GATHER[1] - 0.1 + i * 0.03, t));
+  const detach = E.inOutCubic(inv(MORPH[0], MORPH[0] + 0.7, t));
+  const gm = E.inOutCubic(inv(GATHER[0] + 0.2, GATHER[1] + 0.05, t));
+  const antic = bump(t, RISE, RISE + 0.22);
+  const mR = (0.86 * gm + 0.1 * Math.min(1, gm * 8)) * (1 - detach), mH = (0.4 * gm + 0.06 * Math.min(1, gm * 8)) * (1 - 0.3 * antic) * (1 - detach);
+  DROPS.forEach((d, i) => {
+    const tau = t - d.ts; if (tau < 0) return;
+    const th = t - tHit(d);
+    if (th < 0) {
+      const y = Y0 - 0.5 * G * tau * tau, v = G * tau, s = 1 + 0.5 * Math.min(1, v / 13);
+      push(d.x, y, d.z, d.r / Math.sqrt(s), d.r * s, d.r / Math.sqrt(s));
+      return;
+    }
+    const sp = spring(th, { k: 230, c: 13 }), sq = spring(th, { k: 320, c: 11 });
+    const R = d.r * (1 + 0.85 * sp), H = d.r * (1 - 0.48 * sq);
+    const amp = 0.032 * Math.exp(-3.2 * th) * (d.splash ? 1.3 : 1);
+    const g = gk(i), k = 1 - 0.8 * g;
+    const x = lerp(d.x, 0, g), z = lerp(d.z, 0, g);
+    if (k * R > 0.01) push(x, H * 0.3 * k, z, R * k, H * k, R * k, amp * (1 - g), th * 30);
+  });
+  // crown splash on the first impact + droplets thrown from its spikes
+  const u = t - T0;
+  let cr = [0, 0, 0, 0];
+  if (u > 0 && u < 0.42) {
+    const k = u / 0.42;
+    cr = [0.2 + 0.78 * E.outCubic(k), 0.42 * Math.sin(Math.PI * Math.min(1, k * 1.15)) * (1 - 0.35 * k), 0.032 * (1 - 0.55 * k), 1];
+  }
+  SPL.forEach((s) => {
+    const v = u - 0.1; if (v <= 0) return;
+    const flight = 2 * s.vy / G;
+    const R0 = 0.2 + 0.78 * E.outCubic(Math.min(1, 0.1 / 0.42));
+    if (v < flight) {
+      const dr = R0 + s.vh * v, y = 0.38 + s.vy * v - 0.5 * G * v * v;
+      const st = 1 + 0.6 * Math.abs(s.vy - G * v) / 6;
+      push(Math.cos(s.a) * dr, Math.max(y, s.r), 0.05 + Math.sin(s.a) * dr, s.r / Math.sqrt(st), s.r * st, s.r / Math.sqrt(st));
+    } else {
+      const w = v - flight, back = E.inOutCubic(clamp(w / 0.8));
+      const dist = (R0 + s.vh * flight) * (1 - back), rr = s.r * 1.5 * (1 - back);
+      if (rr > 0.008) push(Math.cos(s.a) * dist, s.r * 0.3, 0.05 + Math.sin(s.a) * dist, rr, s.r * 0.55 * (1 - back), rr);
+    }
+  });
+  if (mR > 0.02) push(0, mH * 0.08, 0, mR, Math.max(mH, 0.02), mR, 0.02 * antic, t * 26);
+  const fb = 4.62;
+  if (t > fb) {
+    const w = t - fb, y0 = 0.62, r = 0.065, tl = Math.sqrt(2 * (y0 - r) / G);
+    if (w < tl) push(0.08, y0 - 0.5 * G * w * w, 0.05, r * 0.85, r * 1.3, r * 0.85);
+    else { const sp = spring(w - tl, { k: 260, c: 14 }); push(0.08, r * 0.2, 0.05, r * (1 + 1.1 * sp), r * 0.45, r * (1 + 1.1 * sp)); }
+  }
+  const colOn = t > RISE + 0.12 && detach < 1;
+  const cu = t - (RISE + 0.12);
+  const H = 1.62 * spring(cu, { k: 120, c: 8.5 });
+  const sway = Math.exp(-Math.max(cu, 0) * 2.2);
+  const col = [Math.max(H, 0.05), 0.43 * (1 - 0.15 * detach), 0.62 * detach, colOn ? 1 : 0];
+  const swy = [0.16 * Math.sin(cu * 8.5) * sway, 0.09 * Math.cos(cu * 6.8) * sway];
+  const m = clamp(E.inOutCubic(inv(MORPH[0], MORPH[1], t)));
+  const after = t - MORPH[1];
+  const jig = after > 0 ? Math.exp(-after * 3.2) * Math.sin(after * 13) : 0;          // jelly settle after the snap
+  const prY = 1.12 + 0.028 * Math.sin(t * 1.7) + 0.06 * jig;
+  const yaw = lerp(-0.46, 0.42, E.inOutSine(inv(3.9, 8.9, t)));
+  const pr = [prY, yaw, 0.7 * (1 + 0.035 * jig), 0.2 * (1 - 0.06 * jig)];
+  const S_ = []; let ns = 0;
+  if (t > MORPH[1] - 0.05 && t < 7.1) {
+    for (let i = 0; i < 3; i++) {
+      const w = t - (MORPH[1] - 0.05);
+      const back = E.inCubic(inv(5.8 + i * 0.18, 6.85 + i * 0.07, t));
+      const out = E.outCubic(clamp(w / 0.45));
+      const R = lerp(0.2, 1.22 + i * 0.1, out) * (1 - back) + 0.05 * back;
+      const th = i * 2.094 + 0.5 + w * (2.1 - i * 0.25);
+      const r = 0.1 - i * 0.013;
+      S_.push(Math.cos(th) * R, prY + 0.32 * Math.sin(th * 1.7 + i) * (1 - back) * out, Math.sin(th) * R * 0.45, r * clamp(w / 0.2) * (1 - 0.85 * back));
+      ns++;
+    }
+  }
+  while (S_.length < 16) S_.push(0, 0, 0, 0);
+  let mn = [1e3, 1e3, 1e3], mx = [-1e3, -1e3, -1e3];
+  const ext = (x, y, z, rx, ry, rz) => { mn = [Math.min(mn[0], x - rx), Math.min(mn[1], y - ry), Math.min(mn[2], z - rz)]; mx = [Math.max(mx[0], x + rx), Math.max(mx[1], y + ry), Math.max(mx[2], z + rz)]; };
+  for (let i = 0; i < E_.length; i += 4) ext(E_[i], E_[i + 1], E_[i + 2], R_[i] + 0.12, R_[i + 1] + 0.12, R_[i + 2] + 0.12);
+  if (cr[3]) ext(0, 0.25, 0.05, cr[0] + 0.2, 0.6, cr[0] + 0.2);
+  if (colOn) ext(0, H / 2, 0, 0.8, H / 2 + 0.5, 0.8);
+  if (m > 0) ext(0, prY, 0, 0.95, 0.95, 0.95);
+  for (let i = 0; i < ns; i++) ext(S_[i * 4], S_[i * 4 + 1], S_[i * 4 + 2], 0.3, 0.3, 0.3);
+  const n = Math.min(E_.length / 4, NE);
+  while (E_.length < NE * 4) { E_.push(0, 0, 0, 0); R_.push(1, 1, 1, 0); }
+  const morphing = m > 0 && m < 1;
+  return { E_: new Float32Array(E_.slice(0, NE * 4)), R_: new Float32Array(R_.slice(0, NE * 4)), n, S_: new Float32Array(S_), ns, col, swy, cr, m, pr, mn, mx,
+    step: morphing ? 0.55 : 0.8, colK: lerp(0.8, 0.5, detach) };
+}
+
+/* camera: one continuous move — macro on the first impact, pull back over the rain, low hero angle on the rise,
+   slow orbit + push-in on the floating symbol. Catmull-Rom through keys, eased in time. */
+const KEYS = [
+  { t: 0.0, p: [0.3, 0.32, 2.5], a: [0, 0.3, 0.05], ap: 34 },
+  { t: 1.6, p: [0.42, 0.36, 2.78], a: [0, 0.22, 0.05], ap: 32 },
+  { t: 2.9, p: [0.9, 1.05, 5.3], a: [0, 0.14, 0], ap: 14 },
+  { t: 3.9, p: [0.45, 0.78, 5.0], a: [0, 0.42, 0], ap: 14 },
+  { t: 5.0, p: [-0.25, 0.5, 4.55], a: [0, 0.98, 0], ap: 16 },
+  { t: 6.4, p: [-0.62, 1.0, 4.45], a: [0, 1.1, 0], ap: 18 },
+  { t: 8.6, p: [0.48, 1.24, 3.95], a: [0, 1.12, 0], ap: 20 },
+  { t: 10.0, p: [0.62, 1.28, 3.85], a: [0, 1.12, 0], ap: 20 },
+];
+const cr1 = (p0, p1, p2, p3, u) => { const u2 = u * u, u3 = u2 * u; return 0.5 * ((2 * p1) + (-p0 + p2) * u + (2 * p0 - 5 * p1 + 4 * p2 - p3) * u2 + (-p0 + 3 * p1 - 3 * p2 + p3) * u3); };
+function camAt(t) {
+  let i = 0; while (i < KEYS.length - 2 && t > KEYS[i + 1].t) i++;
+  const k0 = KEYS[Math.max(0, i - 1)], k1 = KEYS[i], k2 = KEYS[i + 1], k3 = KEYS[Math.min(KEYS.length - 1, i + 2)];
+  const u = E.inOutSine(clamp((t - k1.t) / (k2.t - k1.t)));
+  const f = (key) => [0, 1, 2].map((j) => cr1(k0[key][j], k1[key][j], k2[key][j], k3[key][j], u));
+  return { p: f('p'), a: f('a'), ap: lerp(k1.ap, k2.ap, u) };
+}
+// what the lens focuses on: the first drop -> the pool -> the column -> the symbol
+function focusPoint(t) {
+  if (t < 2.3) return [0, 0.22, 0.05];
+  if (t < 4.2) return [0, lerp(0.15, 0.3, inv(2.3, 4.2, t)), 0];
+  return [0, lerp(0.3, 1.1, E.inOutCubic(inv(4.2, 5.9, t))), 0];
+}
+
+const cap = document.createElement('div'); cap.id = 'cap'; cap.innerHTML = C.cap; stage.appendChild(cap);
+
+Reel.scene({
+  duration: 10, fps: 30,
+  fonts: ['200 30px "Inter Display"', '600 30px "Inter Display"'],
+  cues: [{ t: 0.8, sfx: 'drip' }, { t: 0.84, sfx: 'splash' }, { t: 2.24, sfx: 'drip' }, { t: 2.51, sfx: 'drip' }, { t: 2.74, sfx: 'drip' }, { t: 2.97, sfx: 'drip' },
+    { t: 3.35, sfx: 'stretch' }, { t: 4.4, sfx: 'blob' }, { t: 5.04, sfx: 'morph' }, { t: 5.89, sfx: 'squish' }, { t: 6.7, sfx: 'swell' }, { t: 7.9, sfx: 'blob' }, { t: 8.0, sfx: 'sparkle' }],
+  render(t) {
+    const s = frameState(t);
+    const cam = camAt(t);
+    // a breath of handheld drift so it never feels like a locked-off CG camera
+    const hx = 0.012 * Math.sin(t * 1.3) + 0.006 * Math.sin(t * 3.1 + 1), hy = 0.009 * Math.sin(t * 1.7 + 2);
+    const ro = [cam.p[0] + hx, cam.p[1] + hy, cam.p[2]];
+    const fp = focusPoint(t);
+    const fd = Math.hypot(ro[0] - fp[0], ro[1] - fp[1], ro[2] - fp[2]);
+    rm.set('uE', s.E_).set('uR', s.R_).set('uN', { __ints: 1, v: s.n }).set('uS', s.S_).set('uNS', { __ints: 1, v: s.ns })
+      .set('uCol', s.col).set('uSway', s.swy).set('uStep', s.step).set('uColK', s.colK).set('uCr', s.cr).set('uMorph', s.m).set('uPr', s.pr).set('uK', 0.42)
+      .set('uIrid', 0.1 + 0.24 * E.inOutSine(inv(6.1, 7.4, t)))
+      .set('uRo', ro).set('uTa', cam.a)
+      .set('uSweep', [lerp(-1.35, 1.35, E.inOutSine(inv(6.55, 8.3, t))), 3.2 * bump(t, 6.55, 8.3)])
+      .set('uBMin', s.mn).set('uBMax', s.mx).set('uFade', E.outCubic(clamp(t / 0.5)));
+    rm.render(t, { focus: fd, aperture: cam.ap, maxCoc: 16 });
+    const ca = E.outCubic(inv(6.5, 7.4, t));
+    cap.style.opacity = ca; cap.style.transform = `translateY(${(1 - ca) * 14}px)`; cap.style.letterSpacing = lerp(0.8, 0.62, ca) + 'em';
+  },
+});
+</script></body></html>

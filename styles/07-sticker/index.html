@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>07 贴纸风科普 · Sticker Explainer</title>
+<script src="../../lib/core.js"></script>
+</head><body><div id="stage"></div>
+<script>
+/* ===== 07 贴纸风科普 · STICKER EXPLAINER =====
+   A self-healing cutting mat seen from above. Vinyl stickers slap down one by one to explain how a video
+   takes off: each is die-cut with a white border, has a glossy sweep that moves as it tilts, a soft
+   shadow that tightens as it lands, and a slight lift at one corner. Marker arrows connect the steps and
+   the camera travels the board like a teacher's hand. */
+const { E, clamp, inv, lerp, spring } = Reel;
+const stage = Reel.makeStage('#1f5c4a');
+const C = Reel.cfg({ title: '一条视频怎么火？', steps: ['选题', '拍摄', '剪辑', '发布'], boom: '爆了！' });
+const RS = Reel.RS;
+const W = Math.round(1920 * RS), H = Math.round(1080 * RS), K = W / 1920;
+const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+cv.style.cssText = 'position:absolute;left:0;top:0;width:1920px;height:1080px';
+stage.appendChild(cv);
+const ctx = cv.getContext('2d');
+const SANS = '"Noto Sans CJK SC"';
+// board: 3000 x 1700 design px (cutting mat)
+const BW = 3560, BH = 1700, BS = 0.9;
+const board = document.createElement('canvas'); board.width = Math.round(BW * BS); board.height = Math.round(BH * BS);
+function buildBoard() {
+  const b = board.getContext('2d'); b.setTransform(BS, 0, 0, BS, 0, 0);
+  b.fillStyle = '#1f6a52'; b.fillRect(0, 0, BW, BH);
+  // mottled rubber
+  for (let i = 0; i < 9000; i++) { b.fillStyle = `rgba(${Math.random() < 0.5 ? '0,0,0' : '255,255,255'},${Math.random() * 0.035})`; b.fillRect(Math.random() * BW, Math.random() * BH, 2 + Math.random() * 3, 2 + Math.random() * 3); }
+  // grid: fine every 25, bold every 125, with ruler numbers
+  for (let x = 0; x <= BW; x += 25) { b.strokeStyle = x % 125 === 0 ? 'rgba(220,245,230,.42)' : 'rgba(220,245,230,.16)'; b.lineWidth = x % 125 === 0 ? 2 : 1; b.beginPath(); b.moveTo(x, 0); b.lineTo(x, BH); b.stroke(); }
+  for (let y = 0; y <= BH; y += 25) { b.strokeStyle = y % 125 === 0 ? 'rgba(220,245,230,.42)' : 'rgba(220,245,230,.16)'; b.lineWidth = y % 125 === 0 ? 2 : 1; b.beginPath(); b.moveTo(0, y); b.lineTo(BW, y); b.stroke(); }
+  b.fillStyle = 'rgba(220,245,230,.55)'; b.font = '600 18px Inter';
+  for (let x = 125, n = 1; x < BW; x += 125, n++) b.fillText(String(n), x + 4, 22);
+  for (let y = 125, n = 1; y < BH; y += 125, n++) b.fillText(String(n), 6, y - 4);
+  // diagonal 45/60 guides
+  b.strokeStyle = 'rgba(220,245,230,.12)'; b.lineWidth = 1.5;
+  for (let k = -BH; k < BW; k += 500) { b.beginPath(); b.moveTo(k, BH); b.lineTo(k + BH, 0); b.stroke(); }
+  // a few cut scratches
+  b.strokeStyle = 'rgba(255,255,255,.07)'; b.lineWidth = 1.2;
+  for (let i = 0; i < 40; i++) { const x = Math.random() * BW, y = Math.random() * BH, a = Math.random() * 3, l = 40 + Math.random() * 160; b.beginPath(); b.moveTo(x, y); b.lineTo(x + Math.cos(a) * l, y + Math.sin(a) * l); b.stroke(); }
+}
+// ---------- sticker factory: die-cut border + gloss + shadow ----------
+function makeSticker(drawFn, w, h, border = 18) {
+  const pad = border + 6;
+  const c = document.createElement('canvas'); c.width = Math.round((w + pad * 2) * K); c.height = Math.round((h + pad * 2) * K);
+  const g = c.getContext('2d'); g.scale(K, K); g.translate(pad, pad);
+  // art on its own layer
+  const art = document.createElement('canvas'); art.width = c.width; art.height = c.height;
+  const a = art.getContext('2d'); a.scale(K, K); a.translate(pad, pad); drawFn(a, w, h);
+  // white die-cut border: stamp the silhouette around in a circle
+  const sil = document.createElement('canvas'); sil.width = c.width; sil.height = c.height;
+  const s = sil.getContext('2d'); s.drawImage(art, 0, 0); s.globalCompositeOperation = 'source-in'; s.fillStyle = '#ffffff'; s.fillRect(0, 0, c.width, c.height);
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  for (let i = 0; i < 24; i++) { const an = i / 24 * Math.PI * 2; g.drawImage(sil, Math.cos(an) * border * K, Math.sin(an) * border * K); }
+  for (let i = 0; i < 12; i++) { const an = i / 12 * Math.PI * 2; g.drawImage(sil, Math.cos(an) * border * 0.5 * K, Math.sin(an) * border * 0.5 * K); }
+  g.drawImage(art, 0, 0);
+  // silhouette of the whole sticker (for shadow + gloss clipping)
+  const all = document.createElement('canvas'); all.width = c.width; all.height = c.height;
+  const al = all.getContext('2d'); al.drawImage(c, 0, 0); al.globalCompositeOperation = 'source-in'; al.fillStyle = '#000'; al.fillRect(0, 0, c.width, c.height);
+  return { c, all, w: w + pad * 2, h: h + pad * 2 };
+}
+function emojiArt(em, size) { return (g, w, h) => { g.font = `${size}px "Noto Color Emoji"`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(em, w / 2, h / 2 + size * 0.06); }; }
+function labelArt(txt, bg, fg, size) {
+  return (g, w, h) => { g.fillStyle = bg; g.beginPath(); g.roundRect(0, 0, w, h, h / 2); g.fill(); g.fillStyle = fg; g.font = `900 ${size}px ${SANS}`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(txt, w / 2, h / 2 + 2); };
+}
+function numArt(n, bg) { return (g, w, h) => { g.fillStyle = bg; g.beginPath(); g.arc(w / 2, h / 2, w / 2, 0, 7); g.fill(); g.fillStyle = '#fff'; g.font = `900 ${w * 0.62}px Inter`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(String(n), w / 2, h / 2 + 3); }; }
+function titleArt(txt) {
+  return (g, w, h) => {
+    g.fillStyle = '#ffde4a'; g.beginPath(); g.roundRect(0, 0, w, h, 26); g.fill();
+    g.fillStyle = '#1b1b1b'; g.font = `900 ${h * 0.56}px ${SANS}`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(txt, w / 2, h / 2 + 4);
+  };
+}
+function burstArt(txt) {
+  return (g, w, h) => {
+    g.fillStyle = '#ff4d2e'; g.beginPath();
+    for (let i = 0; i < 28; i++) { const a = i / 28 * Math.PI * 2, r = (i % 2 ? 0.78 : 1) * w / 2; g.lineTo(w / 2 + Math.cos(a) * r, h / 2 + Math.sin(a) * r * (h / w)); }
+    g.fill();
+    g.fillStyle = '#fff6d6'; g.font = `900 ${w * 0.2}px ${SANS}`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(txt, w / 2, h / 2 + 6);
+  };
+}
+// ---------- the board layout ----------
+const STEP_COLS = ['#3b82f6', '#f97316', '#a855f7', '#10b981'];
+const STEP_EMO = ['🎯', '🎬', '✂️', '🚀'];
+const ST = [];   // stickers: {s, x, y, rot, t0}
+function add(s, x, y, rot, t0) { ST.push({ s, x, y, rot, t0 }); }
+let built = false;
+function buildStickers() {
+  add(makeSticker(titleArt(C.title), 760, 150), 640, 300, -0.04, 0.25);
+  const xs = [520, 1040, 1560, 2080];
+  C.steps.forEach((name, i) => {
+    const x = xs[i], y = i % 2 ? 860 : 760;
+    add(makeSticker(emojiArt(STEP_EMO[i], 190), 230, 230), x, y, (i % 2 ? 0.08 : -0.07), 1.0 + i * 1.05);
+    add(makeSticker(labelArt(name, STEP_COLS[i], '#fff', 54), 200, 82), x + 10, y + 190, (i % 2 ? -0.05 : 0.04), 1.25 + i * 1.05);
+    add(makeSticker(numArt(i + 1, '#111827'), 70, 70), x - 120, y - 120, 0, 1.12 + i * 1.05);
+  });
+  add(makeSticker(burstArt(C.boom), 420, 420), 2620, 780, 0.12, 5.6);
+  add(makeSticker(emojiArt('🔥', 150), 180, 180), 2760, 560, 0.2, 5.95);
+  add(makeSticker(emojiArt('📈', 130), 160, 160), 2480, 1050, -0.15, 6.15);
+  add(makeSticker(labelArt('播放量 ×100', '#111827', '#ffde4a', 44), 330, 74), 2630, 1210, -0.03, 6.35);
+  // tips cluster along the bottom, landing while the camera pulls back
+  add(makeSticker(noteArt('前 3 秒\n决定一切'), 300, 260), 1000, 1330, -0.06, 6.9);
+  add(makeSticker(emojiArt('💡', 140), 170, 170), 740, 1300, 0.12, 7.1);
+  add(makeSticker(noteArt('封面 + 标题\n=  第一眼', '#ffd1dc'), 320, 260), 1420, 1350, 0.05, 7.3);
+  add(makeSticker(emojiArt('👍', 140), 170, 170), 1700, 1300, -0.1, 7.5);
+  add(makeSticker(labelArt('收藏这张图', '#ff4d2e', '#fff', 50), 340, 84), 2060, 1360, 0.04, 7.7);
+}
+function noteArt(txt, bg = '#fff3a3') {
+  return (g, w, h) => {
+    g.fillStyle = bg; g.fillRect(0, 0, w, h);
+    g.fillStyle = 'rgba(0,0,0,.06)'; g.fillRect(0, 0, w, 26);
+    g.fillStyle = '#2b2b2b'; g.font = `700 ${46}px "Noto Serif CJK SC"`; g.textAlign = 'center'; g.textBaseline = 'middle';
+    txt.split('\n').forEach((l, i, a) => g.fillText(l, w / 2, h / 2 + 10 + (i - (a.length - 1) / 2) * 62));
+  };
+}
+// marker arrows between steps (hand drawn): drawn progressively
+const ARROWS = [[680, 740, 900, 800, 1.95], [1200, 830, 1420, 750, 3.0], [1720, 750, 1940, 820, 4.05], [2240, 830, 2420, 760, 5.1]];
+function marker(g, x0, y0, x1, y1, prog, seed) {
+  if (prog <= 0) return;
+  const mx = (x0 + x1) / 2, my = (y0 + y1) / 2 - 90;
+  g.strokeStyle = 'rgba(255,255,255,.92)'; g.lineWidth = 9; g.lineCap = 'round'; g.lineJoin = 'round';
+  g.beginPath(); const N = 30;
+  for (let i = 0; i <= N * prog; i++) { const u = i / N; const x = (1 - u) * (1 - u) * x0 + 2 * u * (1 - u) * mx + u * u * x1, y = (1 - u) * (1 - u) * y0 + 2 * u * (1 - u) * my + u * u * y1; const j = Math.sin(u * 17 + seed) * 2; i ? g.lineTo(x + j, y - j) : g.moveTo(x, y); }
+  g.stroke();
+  if (prog >= 1) { const a = Math.atan2(y1 - my, x1 - mx); g.beginPath(); g.moveTo(x1 - Math.cos(a - 0.5) * 38, y1 - Math.sin(a - 0.5) * 38); g.lineTo(x1, y1); g.lineTo(x1 - Math.cos(a + 0.5) * 38, y1 - Math.sin(a + 0.5) * 38); g.stroke(); }
+}
+// camera over the board
+const KEYS = [
+  { t: 0, x: 980, y: 560, z: 1.0 }, { t: 0.9, x: 980, y: 560, z: 1.05 }, { t: 2.0, x: 1000, y: 760, z: 0.95 },
+  { t: 3.1, x: 1300, y: 800, z: 0.95 }, { t: 4.2, x: 1820, y: 800, z: 0.95 }, { t: 5.4, x: 2300, y: 820, z: 0.92 },
+  { t: 6.6, x: 2460, y: 830, z: 0.9 }, { t: 8.4, x: 1500, y: 850, z: 0.68 }, { t: 10, x: 1500, y: 850, z: 0.66 },
+];
+function camAt(t) {
+  let i = 0; while (i < KEYS.length - 2 && t > KEYS[i + 1].t) i++;
+  const a = KEYS[i], b = KEYS[i + 1], u = E.inOutSine(clamp((t - a.t) / (b.t - a.t)));
+  const z = Math.exp(lerp(Math.log(a.z), Math.log(b.z), u));
+  // never show past the edge of the mat
+  return { x: clamp(lerp(a.x, b.x, u), 960 / z + 4, BW - 960 / z - 4), y: clamp(lerp(a.y, b.y, u), 540 / z + 4, BH - 540 / z - 4), z };
+}
+function drawSticker(st, t) {
+  const u = t - st.t0;
+  if (u < 0) return;
+  // slap: comes in big & lifted, lands with a squash, settles
+  const land = 0.22;
+  let lift, sc;
+  if (u < land) { const v = u / land; lift = (1 - E.inQuad(v)) * 1; sc = lerp(1.35, 1.0, E.inQuad(v)); }
+  else { const v = u - land; lift = 0; sc = 1 - 0.06 * Math.exp(-v * 18) * Math.cos(v * 40); }
+  const rot = st.rot + (u < land ? (1 - u / land) * 0.25 : 0);
+  const { c, all, w, h } = st.s;
+  const sw = w * sc, shh = h * sc;
+  // shadow: offset grows with lift
+  ctx.save();
+  ctx.translate(st.x, st.y);
+  ctx.rotate(rot);
+  ctx.globalAlpha = 0.38 - 0.18 * lift;
+  ctx.filter = `blur(${(4 + lift * 16) * K}px)`;
+  ctx.drawImage(all, -sw / 2 + 6 + lift * 40, -shh / 2 + 10 + lift * 55, sw, shh);
+  ctx.filter = 'none';
+  ctx.globalAlpha = 1;
+  ctx.drawImage(c, -sw / 2, -shh / 2, sw, shh);
+  // glossy sweep: a soft diagonal highlight that slides as the sticker moves
+  const gx = (-0.7 + clamp(u / 0.6) * 1.6) * sw;
+  ctx.globalCompositeOperation = 'source-atop';
+  ctx.restore();
+}
+function glossLayer(st, t) {
+  // gloss drawn through the sticker silhouette using a temp canvas
+  const u = t - st.t0; if (u < 0) return;
+  const { all, w, h } = st.s;
+  const land = 0.22;
+  const sc = u < land ? lerp(1.35, 1.0, E.inQuad(u / land)) : 1 - 0.06 * Math.exp(-(u - land) * 18) * Math.cos((u - land) * 40);
+  const rot = st.rot + (u < land ? (1 - u / land) * 0.25 : 0);
+  const tg = glossC.getContext('2d');
+  tg.setTransform(1, 0, 0, 1, 0, 0); tg.clearRect(0, 0, glossC.width, glossC.height);
+  tg.drawImage(all, 0, 0);
+  tg.globalCompositeOperation = 'source-in';
+  const p = clamp(u / 0.9);
+  const gr = tg.createLinearGradient(0, 0, all.width, all.height);
+  const c0 = clamp(-0.2 + p * 1.2);
+  gr.addColorStop(0, 'rgba(255,255,255,0)'); gr.addColorStop(Math.max(0, c0 - 0.12), 'rgba(255,255,255,0)'); gr.addColorStop(c0, 'rgba(255,255,255,.55)'); gr.addColorStop(Math.min(1, c0 + 0.1), 'rgba(255,255,255,0)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+  tg.fillStyle = gr; tg.fillRect(0, 0, all.width, all.height);
+  tg.globalCompositeOperation = 'source-over';
+  ctx.save(); ctx.translate(st.x, st.y); ctx.rotate(rot);
+  ctx.drawImage(glossC, 0, 0, all.width, all.height, -w * sc / 2, -h * sc / 2, w * sc, h * sc);
+  // a static soft sheen across the top half (vinyl)
+  ctx.restore();
+}
+const glossC = document.createElement('canvas');
+Reel.scene({
+  duration: 10, fps: 30,
+  fonts: [`900 80px ${SANS}`, '200px "Noto Color Emoji"', '900 40px Inter'],
+  setup() { buildBoard(); buildStickers(); glossC.width = Math.max(...ST.map((s) => s.s.c.width)); glossC.height = Math.max(...ST.map((s) => s.s.c.height)); built = true; },
+  cues: [{ t: 0.3, sfx: 'sticker' }, { t: 1.05, sfx: 'sticker' }, { t: 1.3, sfx: 'sticker' }, { t: 1.95, sfx: 'marker' }, { t: 2.05, sfx: 'sticker' }, { t: 2.3, sfx: 'sticker' },
+    { t: 3.0, sfx: 'marker' }, { t: 3.1, sfx: 'sticker' }, { t: 3.35, sfx: 'sticker' }, { t: 4.05, sfx: 'marker' }, { t: 4.15, sfx: 'sticker' }, { t: 4.4, sfx: 'sticker' }, { t: 5.1, sfx: 'marker' }, { t: 5.6, sfx: 'impact' }, { t: 5.95, sfx: 'sticker' }, { t: 6.15, sfx: 'sticker' }, { t: 6.35, sfx: 'sticker' }, { t: 6.9, sfx: 'sticker' }, { t: 7.1, sfx: 'sticker' }, { t: 7.3, sfx: 'sticker' }, { t: 7.5, sfx: 'sticker' }, { t: 7.7, sfx: 'sticker' }],
+  render(t) {
+    const cam = camAt(t);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = '#123d31'; ctx.fillRect(0, 0, W, H);
+    const z = cam.z * K;
+    ctx.setTransform(z, 0, 0, z, (960 - cam.x * cam.z) * K, (540 - cam.y * cam.z) * K);
+    ctx.drawImage(board, 0, 0, BW, BH);
+    // arrows (under the stickers)
+    ARROWS.forEach(([x0, y0, x1, y1, t0], i) => marker(ctx, x0, y0, x1, y1, clamp((t - t0) / 0.45), i * 3));
+    // stickers in placement order
+    for (const st of ST) { drawSticker(st, t); glossLayer(st, t); }
+    // soft overhead light + vignette (screen space)
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    const lg = ctx.createRadialGradient(W * 0.45, H * 0.35, 0, W * 0.5, H * 0.5, W * 0.8);
+    lg.addColorStop(0, 'rgba(255,250,235,.10)'); lg.addColorStop(0.6, 'rgba(0,0,0,0)'); lg.addColorStop(1, 'rgba(0,0,0,.45)');
+    ctx.fillStyle = lg; ctx.fillRect(0, 0, W, H);
+  },
+});
+</script></body></html>

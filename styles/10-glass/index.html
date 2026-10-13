@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>10 弥散渐变 · 玻璃拟态</title>
+<script src="../../lib/core.js"></script><script src="../../lib/gl.js"></script>
+</head><body><div id="stage"></div>
+<script>
+/* ===== 10 弥散渐变 · 玻璃拟态 · LIQUID GLASS =====
+   An aurora wallpaper with a giant clock. Over it, glass that behaves like liquid: every shape is a
+   2D SDF with a rounded bevel, so the wallpaper is refracted (lensing at the rims, slight magnification
+   in the middle), split into RGB at the edges, softly frosted, lit by a specular rim and casting a soft
+   shadow. Shapes merge and split with a smooth union: a pill grows into a music card, a play button
+   splits into three, a bead slides and stretches. Background in 2D canvas -> texture; glass in WebGL. */
+const { E, clamp, inv, lerp, spring } = Reel;
+const stage = Reel.makeStage('#1a0f3a');
+Reel.ownJitter = true;
+const C = Reel.cfg({ time: '9:41', date: '10月6日 星期二', song: 'Aurora', artist: '肖雄 XIAOXIONG', cap: '液态玻璃', capEn: 'LIQUID GLASS' });
+const RS = Reel.RS;
+const W = Math.round(1920 * RS), H = Math.round(1080 * RS), K = W / 1920;
+
+// ---------- wallpaper (2D) ----------
+const bg = document.createElement('canvas'); bg.width = W; bg.height = H;
+const b = bg.getContext('2d');
+function drawWallpaper(t) {
+  b.globalCompositeOperation = 'source-over';
+  const base = b.createLinearGradient(0, 0, 0, H);
+  base.addColorStop(0, '#070726'); base.addColorStop(0.55, '#140a3c'); base.addColorStop(1, '#22072e');
+  b.fillStyle = base; b.fillRect(0, 0, W, H);
+  // aurora blobs drifting
+  b.globalCompositeOperation = 'screen';
+  const blobs = [
+    [0.12, 0.3, 0.42, '#e8228c', 0.0], [0.82, 0.18, 0.45, '#4b3cff', 1.7], [0.62, 0.86, 0.5, '#ff6a1f', 3.1],
+    [0.28, 0.82, 0.38, '#0fb8ff', 4.4], [0.95, 0.7, 0.35, '#9b2bff', 2.2],
+  ];
+  for (const [x, y, r, c, p] of blobs) {
+    const cx = (x + 0.06 * Math.sin(t * 0.35 + p)) * W, cy = (y + 0.05 * Math.cos(t * 0.3 + p * 1.3)) * H, rr = r * W * (0.95 + 0.08 * Math.sin(t * 0.5 + p));
+    const g = b.createRadialGradient(cx, cy, 0, cx, cy, rr);
+    g.addColorStop(0, c + 'cc'); g.addColorStop(0.5, c + '55'); g.addColorStop(1, c + '00');
+    b.fillStyle = g; b.fillRect(0, 0, W, H);
+  }
+  // aurora ribbons
+  b.globalCompositeOperation = 'screen';
+  for (let k = 0; k < 3; k++) {
+    b.beginPath();
+    for (let i = 0; i <= 40; i++) {
+      const x = i / 40 * W, y = H * (0.42 + 0.08 * k) + Math.sin(i * 0.35 + t * 0.6 + k * 2) * 40 * K + Math.sin(i * 0.11 - t * 0.4 + k) * 70 * K;
+      i ? b.lineTo(x, y) : b.moveTo(x, y);
+    }
+    b.strokeStyle = ['rgba(90,255,210,.20)', 'rgba(255,120,220,.16)', 'rgba(120,150,255,.16)'][k];
+    b.lineWidth = (60 + 30 * k) * K; b.filter = `blur(${18 * K}px)`; b.stroke(); b.filter = 'none';
+  }
+  b.globalCompositeOperation = 'source-over';
+  // fine grid + stars: something crisp for the glass to bend
+  b.strokeStyle = 'rgba(255,255,255,.07)'; b.lineWidth = 1;
+  for (let x = 0; x <= 1920; x += 80) { b.beginPath(); b.moveTo(x * K, 0); b.lineTo(x * K, H); b.stroke(); }
+  for (let y = 0; y <= 1080; y += 80) { b.beginPath(); b.moveTo(0, y * K); b.lineTo(W, y * K); b.stroke(); }
+  for (let i = 0; i < 70; i++) { const x = (Math.sin(i * 91.3) * 0.5 + 0.5) * W, y = (Math.sin(i * 47.7) * 0.5 + 0.5) * H * 0.6, a = 0.4 + 0.5 * Math.sin(t * 2 + i); b.fillStyle = `rgba(255,255,255,${a})`; b.fillRect(x, y, 2 * K, 2 * K); }
+  // giant clock + date
+  b.fillStyle = 'rgba(255,255,255,.96)';
+  b.font = `600 ${430 * K}px "Inter Display", Inter`; b.textAlign = 'center'; b.textBaseline = 'alphabetic';
+  if ('letterSpacing' in b) b.letterSpacing = `${-12 * K}px`;
+  b.fillText(C.time, 960 * K, 560 * K);
+  if ('letterSpacing' in b) b.letterSpacing = '0px';
+  b.font = `600 ${44 * K}px "Noto Sans CJK SC"`; b.fillStyle = `rgba(255,255,255,${0.85 * (1 - clamp((t - 1.3) / 0.4))})`;
+  b.fillText(C.date, 960 * K, 170 * K);
+  // caption, written into the wallpaper so the glass bends it too
+  const ca = E.outCubic(inv(8.2, 9.0, t));
+  if (ca > 0) {
+    b.globalAlpha = ca;
+    b.font = `900 ${96 * K}px "Noto Sans CJK SC"`; b.fillStyle = '#ffffff';
+    if ('letterSpacing' in b) b.letterSpacing = `${18 * K}px`;
+    b.fillText(C.cap, 960 * K, 712 * K);
+    b.font = `600 ${26 * K}px Inter`; if ('letterSpacing' in b) b.letterSpacing = `${16 * K}px`;
+    b.fillStyle = 'rgba(255,255,255,.8)'; b.fillText(C.capEn, 960 * K, 768 * K);
+    if ('letterSpacing' in b) b.letterSpacing = '0px';
+    b.globalAlpha = 1;
+  }
+}
+
+// ---------- glass (WebGL) ----------
+const cv = document.createElement('canvas'); cv.width = W; cv.height = H;
+cv.style.cssText = 'position:absolute;left:0;top:0;width:1920px;height:1080px';
+stage.appendChild(cv);
+const G = Reel.GL(cv);
+const gl = G.gl;
+const tex = gl.createTexture();
+gl.bindTexture(gl.TEXTURE_2D, tex);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.MIRRORED_REPEAT); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.MIRRORED_REPEAT);
+const NS = 8;
+const prog = G.program(`#version 300 es
+precision highp float;
+in vec2 uv; out vec4 o;
+uniform sampler2D uBg; uniform vec2 uRes, uJit; uniform float uK, uT;
+uniform vec4 uS[${NS}];     // shape: centre xy (design px, y down), half size xy
+uniform vec4 uP[${NS}];     // corner radius, blend k, frost, bevel radius (0 = hidden)
+uniform vec4 uOrb;          // magnifier orb: centre xy, radius, strength
+float sdRR(vec2 p, vec2 b, float r){ vec2 q = abs(p) - b + r; return length(max(q, 0.)) + min(max(q.x, q.y), 0.) - r; }
+float smin(float a, float b, float k){ float h = max(k - abs(a - b), 0.)/k; return min(a, b) - h*h*k*.25; }
+float hash12(vec2 p){ vec3 p3 = fract(vec3(p.xyx)*.1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y)*p3.z); }
+// distance to the glass (design px), plus the frost of the nearest shape
+float gBev = 34.;
+float sdGlass(vec2 p, out float frost){
+  float d = 1e4; frost = 0.; gBev = 34.;
+  for (int i=0;i<${NS};i++){
+    if (uP[i].w < .5) continue;
+    float s = sdRR(p - uS[i].xy, uS[i].zw, min(uP[i].x, min(uS[i].z, uS[i].w)));
+    float wgt = clamp(.5 - (s - d)/max(uP[i].y, 8.), 0., 1.);
+    frost = mix(frost, uP[i].z, wgt); gBev = mix(gBev, uP[i].w, wgt);
+    d = uP[i].y > .5 ? smin(d, s, uP[i].y) : min(d, s);
+  }
+  return d;
+}
+vec3 bgAt(vec2 p){ return texture(uBg, p/vec2(1920., 1080.)).rgb; }
+vec3 frosted(vec2 p, float r){
+  if (r < .5) return bgAt(p);
+  vec3 c = vec3(0.); float w = 0.;
+  for (int i=0;i<12;i++){ float a = float(i)*2.39996, rr = sqrt((float(i) + .5)/12.)*r; vec2 q = p + vec2(cos(a), sin(a))*rr; c += bgAt(q); w += 1.; }
+  return c/w;
+}
+void main(){
+  vec2 fc = gl_FragCoord.xy + uJit;
+  vec2 p = vec2(fc.x, uRes.y - fc.y)/uK;            // design px, y down
+  float frost;
+  float d = sdGlass(p, frost);
+  vec3 col = bgAt(p);
+  // soft shadow under the glass
+  float fs;
+  float ds = sdGlass(p - vec2(0., 18.), fs);
+  if (d > 0.) col *= 1. - .2*exp(-max(ds, 0.)/30.)*smoothstep(-20., 6., d);
+  if (d < 1.5){
+    float e = 1.;
+    float f2;
+    vec2 g = vec2(sdGlass(p + vec2(e, 0.), f2) - sdGlass(p - vec2(e, 0.), f2), sdGlass(p + vec2(0., e), f2) - sdGlass(p - vec2(0., e), f2))/(2.*e);
+    float gl2 = length(g); vec2 nrm = gl2 > 1e-4 ? g/gl2 : vec2(0.);
+    float f3; sdGlass(p, f3);
+    float Rb = gBev;
+    float tt = clamp(-d/Rb, 0., 1.);
+    float bend = min(Rb, 40.)*1.5*pow(1. - tt, 2.4);           // lens bevel: strongest at the rim
+    vec2 off = -nrm*bend;
+    off += -nrm*3.;                                            // gentle magnification across the surface
+    // the orb is a magnifier: content in the middle is enlarged, compressed toward the rim
+    vec2 oq = p - uOrb.xy; float orr = length(oq)/max(uOrb.z, 1.);
+    if (uOrb.w > 0. && orr < 1.05){
+      float wq = uOrb.w*smoothstep(1.05, .9, orr);
+      vec2 mag = -oq*.45*(1. - orr*orr);
+      off = mix(off, mag - nrm*26.*pow(1. - clamp(-d/26., 0., 1.), 2.), wq);
+    }
+    float disp = .09*pow(1. - tt, 1.4);
+    vec3 rc;
+    float fr = frost;
+    rc.r = frosted(p + off*(1. + disp), fr).r;
+    rc.g = frosted(p + off, fr).g;
+    rc.b = frosted(p + off*(1. - disp), fr).b;
+    // body: a slight milky tint, brighter at the top, plus edge sheen
+    rc = mix(rc, vec3(1.), .025 + .04*fr/6.);
+    rc *= 1.06;
+    float sheen = pow(1. - tt, 3.);
+    rc += vec3(1.)*.07*sheen;
+    rc *= 1. - .22*sheen*smoothstep(-.2, .8, dot(nrm, vec2(0., 1.)));       // darker rim at the bottom (inner shade)
+    rc += vec3(1.)*.06*smoothstep(.0, -1., dot(nrm, vec2(0., 1.)))*(1. - tt);   // top gloss
+    // specular rims: key from the upper left, a fainter internal one opposite
+    vec2 L = normalize(vec2(-.6, -.8));
+    float rim = smoothstep(4., 0., -d)*smoothstep(-1.5, 0., -d - .5);
+    float rim1 = smoothstep(2.6, .2, abs(d + 1.4));
+    rc += vec3(1.)*rim1*(.18 + 1.1*pow(max(dot(-nrm, L), 0.), 2.));
+    rc += vec3(1.)*rim1*.45*pow(max(dot(nrm, L), 0.), 3.);
+    if (uOrb.w > 0. && orr < 1.){                                // glossy highlight + thick-glass ring on the orb
+      vec2 hq = oq/uOrb.z - vec2(-.38, -.46);
+      rc += vec3(1.)*.55*uOrb.w*smoothstep(.3, .0, length(hq*vec2(1., 1.6)) - .05);
+      rc *= 1. - .12*uOrb.w*smoothstep(.75, .97, orr);
+    }
+    float a = smoothstep(.75, -.75, d);                          // antialiased edge
+    col = mix(col, rc, a);
+  }
+  col += (hash12(fc + uT*60.) - .5)/255.;
+  o = vec4(col, 1.);
+}`);
+
+// ---------- UI content drawn on the glass ----------
+const ui = document.createElement('canvas'); ui.width = W; ui.height = H;
+ui.style.cssText = 'position:absolute;left:0;top:0;width:1920px;height:1080px';
+stage.appendChild(ui);
+const u = ui.getContext('2d');
+function roundRect(c, x, y, w, h, r) { c.beginPath(); c.roundRect(x * K, y * K, w * K, h * K, r * K); }
+function icon(kind, x, y, s, a) {
+  u.save(); u.globalAlpha = a; u.translate(x * K, y * K); u.scale(s * K, s * K); u.fillStyle = '#fff';
+  if (kind === 'play') { u.beginPath(); u.moveTo(-9, -12); u.lineTo(14, 0); u.lineTo(-9, 12); u.closePath(); u.fill(); }
+  if (kind === 'pause') { u.fillRect(-10, -12, 7, 24); u.fillRect(3, -12, 7, 24); }
+  if (kind === 'next' || kind === 'prev') { u.scale(kind === 'prev' ? -1 : 1, 1); u.beginPath(); u.moveTo(-12, -10); u.lineTo(2, 0); u.lineTo(-12, 10); u.closePath(); u.fill(); u.beginPath(); u.moveTo(0, -10); u.lineTo(14, 0); u.lineTo(0, 10); u.closePath(); u.fill(); }
+  if (kind === 'vol') { u.beginPath(); u.moveTo(-12, -5); u.lineTo(-5, -5); u.lineTo(3, -12); u.lineTo(3, 12); u.lineTo(-5, 5); u.lineTo(-12, 5); u.closePath(); u.fill(); u.strokeStyle = '#fff'; u.lineWidth = 2.5; u.beginPath(); u.arc(4, 0, 9, -0.8, 0.8); u.stroke(); }
+  u.restore();
+}
+
+// ---------- choreography ----------
+const sp = (t, t0, k = 160, c = 15) => spring(Math.max(0, t - t0), { k, c });
+function shapes(t) {
+  const S = [];
+  // 1. dynamic-island pill drops in, then swells into the music card (stays at the top)
+  const drop = sp(t, 0.25, 140, 13);
+  const grow = sp(t, 1.5, 120, 15);
+  const cw = lerp(170, 800, grow), ch = lerp(50, 190, grow), cy = lerp(-60, 66, drop) + lerp(0, 74, grow), cx = 960;
+  S.push({ c: [cx, cy], h: [cw / 2, ch / 2], r: 56, k: 0, frost: 2, bev: 34, on: 1 });
+  // 2. play button drops in (2.5), splits into prev / play / next (3.25)
+  const pd = sp(t, 2.5, 150, 12);
+  const split = sp(t, 3.25, 110, 11);
+  const by = lerp(1200, 900, pd);
+  const sep = 185 * split;
+  const on2 = t > 2.45 ? 1 : 0;
+  S.push({ c: [960 - sep, by], h: [58 - 10 * split, 58 - 10 * split], r: 80, k: 80, frost: 1, bev: 30, on: on2 });
+  S.push({ c: [960, by], h: [70, 70], r: 80, k: 80, frost: 1, bev: 30, on: on2 });
+  S.push({ c: [960 + sep, by], h: [58 - 10 * split, 58 - 10 * split], r: 80, k: 80, frost: 1, bev: 30, on: on2 });
+  // 3. a glass orb is pulled out of the play button (4.2), drifts across the clock as a lens, then drops back (7.4)
+  const out = E.inOutSine(clamp((t - 4.2) / 0.9));
+  const back = E.inOutSine(clamp((t - 7.0) / 0.8));
+  const path = clamp((t - 4.9) / 2.2);
+  const ox = lerp(960, lerp(700, 1240, E.inOutSine(path)), out) * (1 - back) + 960 * back;
+  const oy = lerp(by, 470 + 25 * Math.sin(path * Math.PI), out) * (1 - back) + by * back;
+  const orR = lerp(40, 150, out) * (1 - back) + 40 * back;
+  const on3 = t > 4.15 && t < 7.85 ? 1 : 0;
+  S.push({ c: [ox, oy], h: [orR, orR], r: 400, k: 75, frost: 0, bev: 34, on: on3 });
+  // 4. volume track + bead (7.2 - 8.8); the bead stretches with speed
+  const tr = sp(t, 7.1, 140, 16);
+  const bp = (x) => lerp(1250, 1650, E.inOutCubic(clamp((x - 7.6) / 0.9))) - lerp(0, 160, E.inOutCubic(clamp((x - 8.6) / 0.6)));
+  const bx = bp(t), vel = Math.abs(bp(t + 0.02) - bp(t - 0.02)) / 0.04 / 700;
+  S.push({ c: [1460, 1010 - 70 * tr], h: [230 * tr, 9 * tr], r: 9, k: 0, frost: 2, bev: 9, on: t > 7.1 ? 1 : 0 });
+  S.push({ c: [bx, 1010 - 70 * tr], h: [28 * (1 + 0.55 * vel) * tr, 28 * (1 - 0.2 * vel) * tr], r: 30, k: 26, frost: 0, bev: 26, on: t > 7.25 ? 1 : 0 });
+  return { S, card: { cx, cy, cw, ch, grow, drop }, play: { by, sep, split, pd }, vol: { bx, tr }, orb: [ox, oy, orR, on3 * out * (1 - back)] };
+}
+function drawUI(t, st) {
+  u.clearRect(0, 0, W, H);
+  const { card, play, vol } = st;
+  // card content
+  const a = clamp((card.grow - 0.55) / 0.35);
+  if (a > 0) {
+    const x0 = card.cx - card.cw / 2, y0 = card.cy - card.ch / 2;
+    u.save(); u.globalAlpha = a;
+    const ag = u.createLinearGradient((x0 + 30) * K, (y0 + 28) * K, (x0 + 124) * K, (y0 + 122) * K);
+    ag.addColorStop(0, '#ff6fb5'); ag.addColorStop(0.5, '#ffb347'); ag.addColorStop(1, '#6a5cff');
+    u.fillStyle = ag; roundRect(u, x0 + 36, y0 + 36, 138, 138, 30); u.fill();
+    u.fillStyle = 'rgba(255,255,255,.96)'; u.font = `700 ${56 * K}px Inter`; u.textBaseline = 'alphabetic'; u.fillText(C.song, (x0 + 206) * K, (y0 + 96) * K);
+    u.fillStyle = 'rgba(255,255,255,.72)'; u.font = `500 ${32 * K}px "Noto Sans CJK SC"`; u.fillText(C.artist, (x0 + 206) * K, (y0 + 144) * K);
+    for (let i = 0; i < 26; i++) { const hgt = 10 + 40 * Math.abs(Math.sin(t * 5 + i * 0.7)) * Math.abs(Math.sin(i * 1.3)); u.fillStyle = 'rgba(255,255,255,.85)'; roundRect(u, x0 + card.cw - 250 + i * 8.5, card.cy - hgt / 2, 5, hgt, 2.5); u.fill(); }
+    u.restore();
+  }
+  // transport icons
+  if (play.pd > 0.05) {
+    const ia = clamp((play.split - 0.3) / 0.5);
+    icon(t > 3.8 && t < 7.6 ? 'pause' : 'play', 962, play.by, 2.1, clamp(play.pd));
+    icon('prev', 960 - play.sep, play.by, 1.6, ia);
+    icon('next', 960 + play.sep, play.by, 1.6, ia);
+  }
+  if (vol.tr > 0.1) icon('vol', 1170, 1010 - 70 * vol.tr, 1.2, clamp(vol.tr));
+}
+
+Reel.scene({
+  duration: 10, fps: 30,
+  fonts: [`600 430px "Inter Display"`, '600 44px "Noto Sans CJK SC"', '900 96px "Noto Sans CJK SC"', '700 40px Inter', '500 26px "Noto Sans CJK SC"'],
+  cues: [{ t: 0.3, sfx: 'blob' }, { t: 1.5, sfx: 'expand' }, { t: 2.55, sfx: 'blob' }, { t: 3.25, sfx: 'stretch' }, { t: 4.25, sfx: 'stretch' }, { t: 4.9, sfx: 'whoosh' }, { t: 7.45, sfx: 'blob' }, { t: 7.6, sfx: 'stretch' }, { t: 8.2, sfx: 'chime' }],
+  render(t) {
+    drawWallpaper(t);
+    gl.bindTexture(gl.TEXTURE_2D, tex);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, bg);
+    const st = shapes(t);
+    const S4 = new Float32Array(NS * 4), P4 = new Float32Array(NS * 4);
+    st.S.forEach((s, i) => { S4.set([s.c[0], s.c[1], Math.max(s.h[0], 0.01), Math.max(s.h[1], 0.01)], i * 4); P4.set([s.r, s.k, s.frost, s.on ? Math.max(s.bev, 1) : 0], i * 4); });
+    const jit = Reel.jit || [0, 0];
+    prog.use().set('uBg', { tex, unit: 0 }).set('uRes', [W, H]).set('uJit', [jit[0], -jit[1]]).set('uK', K).set('uT', t);
+    const lS = gl.getUniformLocation(prog.pr, 'uS'), lP = gl.getUniformLocation(prog.pr, 'uP');
+    gl.uniform4fv(lS, S4); gl.uniform4fv(lP, P4);
+    gl.uniform4fv(gl.getUniformLocation(prog.pr, 'uOrb'), new Float32Array(st.orb));
+    prog.draw(null);
+    drawUI(t, st);
+  },
+});
+</script></body></html>

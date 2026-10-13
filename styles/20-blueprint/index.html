@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>20 蓝图工程图 · Blueprint</title>
+<script src="../../lib/core.js"></script><script src="../../lib/gl.js"></script><script src="../../lib/rm.js"></script>
+<style>
+  #cap{position:absolute;left:190px;top:380px;text-align:left;color:#f2f4f8}
+  #cap .zh{font:200 84px 'Noto Sans CJK SC';letter-spacing:.16em;line-height:1.3}
+  #cap .en{margin-top:26px;font:400 17px Inter;letter-spacing:.5em;color:rgba(242,244,248,.55)}
+  #cap .rule{width:64px;height:2px;background:#7fb2ff;margin:26px 0 0}
+</style>
+</head><body><div id="stage"></div>
+<script>
+/* ===== 20 蓝图工程图 · Blueprint → Product =====
+   A podcast microphone, exploded, drawn as a living technical drawing: silhouette and crease lines are found by
+   the raymarcher itself, dimension lines and callouts track the 3D parts. The parts assemble, then a scan line
+   turns the drawing into the real product in a dark studio. */
+const C = Reel.cfg({
+  labels: ['防喷网罩', '收音头', '机身', '支架', '旋钮', '底座'], title: '播客麦克风 · 爆炸视图', dwg: 'DWG. NO. XX-2026-020',
+  drawn: 'DRAWN  XIAOXIONG', scale: 'SCALE  1 : 2', date: 'DATE  2026.10.06', cap: '从图纸 到实物', capEn: 'FROM BLUEPRINT TO PRODUCT',
+});
+const { E, clamp, inv, lerp } = Reel;
+const stage = Reel.makeStage('#0c3480');
+Reel.ownJitter = true;
+const FOC = 4.2;
+
+const rm = Reel.RM(stage, {
+  bloom: 0.35, th: 1.2, expo: 1.0, vig: 0.3, grain: 0.02, ca: 0.4, contrast: 1.03, sat: 1.0, bands: 8,
+  uniforms: `uniform float uE, uScan, uReveal, uFade; uniform vec3 uRo, uTa; uniform vec2 uSweep; uniform float uYaw;`,
+  scene: `
+float sdCylY(vec3 p, float r, float h){ vec2 d = abs(vec2(length(p.xz), p.y)) - vec2(r, h); return min(max(d.x,d.y),0.) + length(max(d,0.)); }
+float sdCylX(vec3 p, float r, float h){ return sdCylY(p.yxz, r, h); }
+// parts in mic space (exploded by uE). returns (d, part id)
+vec2 mic(vec3 p){
+  p = rotY(-uYaw) * p;
+  float e = uE;
+  vec2 d = vec2(1e3, -1.);
+  // 1 grille head
+  vec3 q = p - vec3(0., .95*e, 0.);
+  float h = sdCapsule(q, vec3(0.,1.27,0.), vec3(0.,2.12,0.), .44); if (h < d.x) d = vec2(h, 1.);
+  float band = sdTorus(q - vec3(0.,1.7,0.), vec2(.452,.042)); if (band < d.x) d = vec2(band, 2.);
+  // 2 collar ring (capsule base)
+  q = p - vec3(0., .5*e, 0.);
+  float col = sdTorus(q - vec3(0.,1.22,0.), vec2(.415,.055)); if (col < d.x) d = vec2(col, 2.);
+  // 3 body
+  float body = sdRoundCylinder(p - vec3(0.,.78,0.), .19, .05, .42); if (body < d.x) d = vec2(body, 3.);
+  float plate = sdRoundBox(p - vec3(0.,.86,.395), vec3(.11,.17,.02), .015); if (plate < d.x) d = vec2(plate, 4.);
+  // 4 yoke
+  q = p - vec3(0., -.28*e, 0.);
+  for (int s=0;s<2;s++){ float sx = s==0 ? -1. : 1.;
+    vec3 a = q - vec3(sx*(.6 + .38*e), .92, 0.); float arm = sdRoundBox(a, vec3(.045,.46,.09), .03); if (arm < d.x) d = vec2(arm, 5.);
+    vec3 k = p - vec3(sx*(.7 + .9*e), 1.08 - .28*e*0., 0.); float knob = sdCylX(k, .115, .055) - .012; if (knob < d.x) d = vec2(knob, 6.); }
+  float bar = sdRoundBox(q - vec3(0.,.42,0.), vec3(.64 + .38*e,.045,.09), .03); if (bar < d.x) d = vec2(bar, 5.);
+  // 5 pole + 6 base
+  q = p - vec3(0., -.62*e, 0.);
+  float pole = sdCylY(q - vec3(0.,-.1,0.), .055, .48); if (pole < d.x) d = vec2(pole, 7.);
+  q = p - vec3(0., -1.05*e, 0.);
+  float base = sdRoundCylinder(q - vec3(0.,-.62,0.), .4, .04, .065); if (base < d.x) d = vec2(base, 8.);
+  return d;
+}
+const float FLOORY = -.69;
+float mapS(vec3 p){ return mic(p).x; }
+vec3 nrm(vec3 p){ const vec2 k = vec2(1.,-1.)*.0006;
+  return normalize(k.xyy*mapS(p+k.xyy) + k.yyx*mapS(p+k.yyx) + k.yxy*mapS(p+k.yxy) + k.xxx*mapS(p+k.xxx)); }
+// march with near-miss tracking (for silhouette lines): returns t (or -1), id, min normalised gap, depth of that gap
+vec2 cylHit(vec3 ro, vec3 rd){                     // bounding cylinder around the (exploded) mic
+  const float R = 1.95, Y0 = -2.05, Y1 = 3.75;
+  float a = dot(rd.xz, rd.xz), b = dot(ro.xz, rd.xz), c = dot(ro.xz, ro.xz) - R*R;
+  float disc = b*b - a*c; if (disc < 0.) return vec2(1., -1.);
+  float s = sqrt(disc); float t0 = (-b - s) / a, t1 = (-b + s) / a;
+  float ty0 = (Y0 - ro.y) / rd.y, ty1 = (Y1 - ro.y) / rd.y; float tlo = min(ty0, ty1), thi = max(ty0, ty1);
+  return vec2(max(t0, tlo), min(t1, thi));
+}
+vec4 marchBP(vec3 ro, vec3 rd, float px, out float gapT){
+  float mw = 1e3; gapT = 0.; float idh = -1.;
+  vec2 bb = cylHit(ro, rd); if (bb.y < max(bb.x, 0.)) return vec4(-1., -1., 1e3, 0.);
+  float t = max(bb.x, 0.);
+  for (int i=0;i<150;i++){
+    vec2 h = mic(ro + rd*t);
+    float w = h.x / (t*px);
+    if (w < mw) { mw = w; gapT = t; }
+    if (h.x < .0004*t) { idh = h.y; break; }
+    t += h.x * .9; if (t > bb.y) { t = -1.; break; }
+  }
+  return vec4(t, idh, mw, 0.);
+}
+vec3 bpPaper(vec2 fc){
+  vec2 uv = fc / uRes;
+  vec3 c = mix(vec3(.0035,.026,.13), vec3(.008,.052,.25), smoothstep(1.2, .1, length((uv - vec2(.5,.55)) * vec2(1.4,1.))));
+  vec2 g = fc / (uRes.y / 54.); vec2 gm = fc / (uRes.y / 10.8);
+  float minor = max(smoothstep(.06, 0., abs(fract(g.x)-.5) - .44), smoothstep(.06, 0., abs(fract(g.y)-.5) - .44));
+  float major = max(smoothstep(.04, 0., abs(fract(gm.x)-.5) - .485), smoothstep(.04, 0., abs(fract(gm.y)-.5) - .485));
+  c += vec3(.35,.5,1.) * (minor * .022 + major * .05);
+  c *= .92 + .08 * fbm2(fc * .02);                                   // paper unevenness
+  return c;
+}
+vec3 blueprint(vec2 fc, vec3 ro, vec3 rd, float px){
+  vec3 c = bpPaper(fc);
+  float gapT; vec4 h = marchBP(ro, rd, px, gapT);
+  float line = 0.;
+  // silhouettes: near-miss before a hit far behind, or a miss
+  float sil = smoothstep(1.7, .55, h.z);
+  if (h.x < 0. || h.x - gapT > .25) line = max(line, sil);
+  float yref = h.x > 0. ? (ro + rd*h.x).y : (ro + rd*gapT).y;
+  if (h.x > 0.) {
+    vec3 p = ro + rd*h.x; vec3 n = nrm(p);
+    vec3 tA = normalize(cross(n, abs(n.y) < .9 ? vec3(0.,1.,0.) : vec3(1.,0.,0.))), tB = cross(n, tA);
+    float o = h.x * px * 2.2;
+    float cr = min(dot(n, nrm(p + tA*o)), dot(n, nrm(p + tB*o)));
+    line = max(line, smoothstep(.93, .7, cr));
+    c += vec3(.1,.22,.6) * .07 * (.5 + .5*dot(n, normalize(vec3(-.4,.6,.7))));     // a whisper of shading on the parts
+    // fine technical detail: grille rings and body ribs
+    vec3 lp = rotY(-uYaw) * p;
+    if (h.y < 1.5) { float yy = lp.y - .95*uE; line = max(line, .45 * smoothstep(.12, .0, abs(fract(yy / .09) - .5) * .09 / (h.x*px) - .9)); }
+  }
+  float xr = -yref + 2.6;
+  float reveal = smoothstep(uReveal, uReveal - .35, xr);   // draw-on from the top of the exploded stack downwards
+  float tip = exp(-pow((xr - uReveal + .12) / .1, 2.)) * step(uReveal, 7.);   // plotter glow on the frontier
+  c = mix(c, vec3(.82,.88,1.) + vec3(.6,1.,2.2) * tip, line * max(reveal, tip));
+  return c;
+}
+/* ---------------- the real product ---------------- */
+float rectL(vec3 r, vec3 c, vec3 up, vec2 hs, float soft){
+  float cz = dot(r, c); if (cz <= 0.) return 0.;
+  vec3 u = normalize(cross(up, c)), v = cross(c, u); vec2 q = vec2(dot(r,u), dot(r,v)) / cz;
+  vec2 e = smoothstep(hs + soft, hs - soft, abs(q)); return e.x * e.y;
+}
+vec3 env(vec3 r){
+  vec3 c = mix(vec3(.01,.011,.014), vec3(.03,.032,.04), smoothstep(-.3, .8, r.y));
+  c += vec3(1.,.97,.93) * 3.2 * rectL(r, normalize(vec3(-.7,.55,.45)), vec3(0.,1.,0.), vec2(.35,.5), .15);
+  c += vec3(.75,.85,1.) * 2.2 * rectL(r, normalize(vec3(.85,.3,-.4)), vec3(0.,1.,0.), vec2(.05,.7), .04);
+  c += vec3(1.,.8,.6) * 1.4 * rectL(r, normalize(vec3(.1,.95,-.3)), vec3(0.,0.,1.), vec2(.6,.25), .2);
+  if (uSweep.y > 0.) c += vec3(1.) * uSweep.y * rectL(r, normalize(vec3(sin(uSweep.x),.2,cos(uSweep.x))), vec3(0.,1.,0.), vec2(.025,1.), .02);
+  return c;
+}
+const vec3 KEY = normalize(vec3(-.7,.55,.45));
+float shadowR(vec3 ro, vec3 L){ float r = 1., t = .02; for (int i=0;i<32;i++){ float h = mapS(ro + L*t); r = min(r, 7.*h/t); t += clamp(h, .02, .3); if (r < .002 || t > 6.) break; } return clamp(r,0.,1.); }
+float aoR(vec3 p, vec3 n){ float o = 0., s = 1.; for (int i=0;i<5;i++){ float h = .015 + .08*float(i); o += (h - mapS(p + n*h))*s; s *= .7; } return clamp(1. - 2.*o, 0., 1.); }
+vec3 shadeReal(vec3 p, vec3 rd, float id){
+  vec3 n = nrm(p); vec3 lp = rotY(-uYaw) * p;
+  float cosT = max(dot(n,-rd), 0.); vec3 r = reflect(rd, n);
+  float sh = shadowR(p + n*.003, KEY), oc = aoR(p, n);
+  float dif = clamp(dot(n, KEY), 0., 1.) * sh;
+  vec3 col;
+  if (id < 1.5) {                                   // grille: dark metal mesh with holes
+    vec2 g = vec2(atan(lp.z, lp.x) * 30. / 3.14159, (lp.y - .95*uE) / .03);
+    g.x += mod(floor(g.y), 2.) * .5;
+    vec2 f = abs(fract(g) - .5);
+    float hole = smoothstep(.28, .2, max(f.x, f.y*1.15));
+    vec3 metal = env(r) * mix(vec3(.55), vec3(.95), schlick(cosT, .5)) * .55 + vec3(.06) * dif;
+    col = mix(metal, vec3(.008) * oc, hole * .85);
+  } else if (id < 2.5 || id > 6.5 && id < 7.5) {    // chrome band, collar, pole
+    col = env(r) * (vec3(.92) + .08*pow(1.-cosT,5.)) * (.4 + .6*oc);
+  } else if (id < 3.5) {                            // body: soft-touch matte black
+    col = vec3(.025) * (dif * 2.2 + .25*oc) + env(r) * .04 * schlick(cosT, .04) * 8.;
+  } else if (id < 4.5) {                            // brushed plate
+    float br = .85 + .15 * sin(lp.x * 900.);
+    col = env(r) * vec3(.7,.72,.75) * br * .8 + vec3(.15) * dif;
+  } else {                                          // satin black metal: yoke, knobs, base
+    float kn = id > 5.5 && id < 6.5 ? .8 + .2*sin(atan(lp.y - 1.08, lp.z) * 60.) : 1.;
+    col = vec3(.03) * (dif * 2. + .3*oc) * kn + env(r) * mix(.06, .5, pow(1.-cosT,4.)) * .5;
+  }
+  return col;
+}
+vec3 realRender(vec3 ro, vec3 rd){
+  float gapT; vec4 h = marchBP(ro, rd, .001, gapT);
+  float tf = rd.y < 0. ? (FLOORY - ro.y) / rd.y : 1e9;
+  vec3 bg = mix(vec3(.006,.007,.009), vec3(.02,.022,.028), smoothstep(-.2, .5, rd.y));
+  bg += vec3(.05,.058,.075) * exp(-pow(length(rd.xy - vec2(.12, .08)) / .42, 2.));
+  if (h.x > 0. && h.x < tf) { gDepth = h.x; return shadeReal(ro + rd*h.x, rd, h.y); }
+  if (tf < 1e8) {
+    vec3 p = ro + rd*tf; gDepth = tf;
+    vec3 c = vec3(.012,.013,.016) + vec3(.05,.052,.06) * exp(-dot(p.xz,p.xz)*.5);
+    c *= .35 + .65 * shadowR(p + vec3(0.,.002,0.), KEY);
+    vec3 rr = reflect(rd, vec3(0.,1.,0.)); float g2; vec4 h2 = marchBP(p, rr, .001, g2);
+    if (h2.x > 0.) { vec3 q = p + rr*h2.x; c += shadeReal(q, rr, h2.y) * .16 * exp(-(q.y - FLOORY) * 2.2); }
+    return mix(c, bg, smoothstep(4., 12., length(p.xz)));
+  }
+  gDepth = 40.; return bg;
+}
+vec3 render(vec2 fc){
+  vec2 uv = (2.*fc - uRes) / uRes.y;
+  vec3 ro = uRo; vec3 rd = camMat(ro, uTa, 0.) * normalize(vec3(uv, ${FOC.toFixed(2)}));
+  float px = 2. / (uRes.y * ${FOC.toFixed(2)});
+  float sy = 1. - fc.y / uRes.y;                    // 0 at top
+  vec3 col;
+  float edge = uScan - sy;
+  if (edge > .004) col = realRender(ro, rd);
+  else if (edge < -.004) { col = blueprint(fc, ro, rd, px); gDepth = 12.; }
+  else { col = mix(blueprint(fc, ro, rd, px), realRender(ro, rd), smoothstep(-.004, .004, edge)); }
+  col += vec3(.45,.8,1.) * 2.6 * exp(-pow(edge / .0035, 2.)) * step(.0, uScan) * step(uScan, 1.);   // the scan line
+  col += vec3(.25,.55,1.) * .35 * exp(-max(-edge, 0.) / .05) * step(edge, 0.) * step(.0, uScan) * step(uScan, 1.);
+  return col * uFade;
+}`,
+});
+
+/* ---------------- 2D overlay: callouts, dimensions, title block ---------------- */
+const { ctx: oc, begin: obegin } = Reel.canvas2d(stage);
+const cap = document.createElement('div'); cap.id = 'cap'; cap.innerHTML = `<div class="zh">${C.cap.split(' ').join('<br>')}</div><div class="rule"></div><div class="en">${C.capEn}</div>`; stage.appendChild(cap);
+function camMatJS(ro, ta) {
+  const w = norm(sub(ta, ro)), u = norm(cross(w, [0, 1, 0])), v = cross(u, w); return { u, v, w };
+}
+const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]], dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]], norm = (a) => { const l = Math.hypot(...a); return a.map((x) => x / l); };
+function project(P, ro, M) {
+  const d = sub(P, ro); const z = dot(d, M.w); const x = dot(d, M.u) / z * FOC, y = dot(d, M.v) / z * FOC;
+  return [960 + x * 540, 540 - y * 540];
+}
+const rotYJ = (p, a) => [Math.cos(a) * p[0] + Math.sin(a) * p[2], p[1], -Math.sin(a) * p[0] + Math.cos(a) * p[2]];
+const BPW = '#eaf3ff';
+function dimLine(a, b, txt, off, k) {      // a,b screen points; off: normal offset px
+  const dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy), nx = -dy / L, ny = dx / L;
+  const A = [a[0] + nx * off, a[1] + ny * off], B = [b[0] + nx * off, b[1] + ny * off];
+  oc.globalAlpha = k; oc.strokeStyle = BPW; oc.fillStyle = BPW; oc.lineWidth = 1.6;
+  oc.setLineDash([]); oc.beginPath();
+  oc.moveTo(a[0] + nx * 6, a[1] + ny * 6); oc.lineTo(a[0] + nx * (off + 10), a[1] + ny * (off + 10));
+  oc.moveTo(b[0] + nx * 6, b[1] + ny * 6); oc.lineTo(b[0] + nx * (off + 10), b[1] + ny * (off + 10));
+  const M = [lerp(A[0], B[0], 0.5), lerp(A[1], B[1], 0.5)];
+  const grow = E.outCubic(k);
+  oc.moveTo(lerp(M[0], A[0], grow), lerp(M[1], A[1], grow)); oc.lineTo(lerp(M[0], B[0], grow), lerp(M[1], B[1], grow)); oc.stroke();
+  const ah = (P, Q) => { const ux = (Q[0] - P[0]) / L, uy = (Q[1] - P[1]) / L; oc.beginPath(); oc.moveTo(P[0], P[1]); oc.lineTo(P[0] + ux * 16 + uy * 5, P[1] + uy * 16 - ux * 5); oc.lineTo(P[0] + ux * 16 - uy * 5, P[1] + uy * 16 + ux * 5); oc.closePath(); oc.fill(); };
+  if (grow > 0.98) { ah(A, B); ah(B, A); }
+  oc.save(); oc.translate(M[0] + nx * 22, M[1] + ny * 22); let ang = Math.atan2(dy, dx); if (ang > Math.PI / 2) ang -= Math.PI; if (ang < -Math.PI / 2) ang += Math.PI; oc.rotate(ang);
+  oc.font = '500 24px "Latin Modern Mono", monospace'; oc.textAlign = 'center'; oc.textBaseline = 'middle'; oc.fillText(txt, 0, 0); oc.restore();
+  oc.globalAlpha = 1;
+}
+function callout(anchor, num, label, side, row, k) {
+  if (k <= 0) return;
+  const bx = side < 0 ? 330 : 1590, by = 250 + row * 112;
+  oc.globalAlpha = k; oc.strokeStyle = BPW; oc.fillStyle = BPW; oc.lineWidth = 1.4;
+  const elbow = [bx + (side < 0 ? 60 : -60), by];
+  const g = E.outCubic(clamp(k * 1.3));
+  oc.beginPath(); oc.arc(anchor[0], anchor[1], 5, 0, Math.PI * 2); oc.fill();
+  oc.beginPath(); oc.moveTo(anchor[0], anchor[1]);
+  const mid = [lerp(anchor[0], elbow[0], g), lerp(anchor[1], elbow[1], g)]; oc.lineTo(mid[0], mid[1]);
+  if (g > 0.99) oc.lineTo(bx, by); oc.stroke();
+  if (g > 0.99) {
+    oc.beginPath(); oc.arc(bx, by, 22, 0, Math.PI * 2); oc.stroke();
+    oc.font = '600 22px "Latin Modern Mono", monospace'; oc.textAlign = 'center'; oc.textBaseline = 'middle'; oc.fillText(num, bx, by + 1);
+    oc.font = '500 26px "Noto Sans CJK SC"'; oc.textAlign = side < 0 ? 'right' : 'left'; oc.fillText(label, bx + (side < 0 ? -36 : 36), by + 1);
+  }
+  oc.globalAlpha = 1;
+}
+function titleBlock(k) {
+  if (k <= 0) return;
+  const x = 1340, y = 900, w = 520, h = 132;
+  oc.globalAlpha = k; oc.strokeStyle = BPW; oc.fillStyle = BPW; oc.lineWidth = 1.6;
+  oc.strokeRect(x, y, w, h); oc.beginPath(); oc.moveTo(x, y + 52); oc.lineTo(x + w, y + 52); oc.moveTo(x, y + 92); oc.lineTo(x + w, y + 92); oc.moveTo(x + 280, y + 52); oc.lineTo(x + 280, y + h); oc.stroke();
+  oc.font = '500 27px "Noto Sans CJK SC"'; oc.textAlign = 'left'; oc.textBaseline = 'middle'; oc.fillText(C.title, x + 18, y + 27);
+  oc.font = '500 17px "Latin Modern Mono", monospace'; oc.fillText(C.dwg, x + 18, y + 72); oc.fillText(C.scale, x + 298, y + 72); oc.fillText(C.drawn, x + 18, y + 112); oc.fillText(C.date, x + 298, y + 112);
+  oc.globalAlpha = 1;
+}
+function centerAxis(a, b, k) {
+  if (k <= 0) return;
+  oc.globalAlpha = k * 0.7; oc.strokeStyle = BPW; oc.lineWidth = 1.2; oc.setLineDash([34, 8, 4, 8]); oc.beginPath(); oc.moveTo(a[0], a[1]); oc.lineTo(b[0], b[1]); oc.stroke(); oc.setLineDash([]); oc.globalAlpha = 1;
+}
+
+/* ---------------- timeline ---------------- */
+function camAt(t) {
+  const k = E.inOutSine(clamp(t / 10));
+  const yaw = lerp(0.62, -0.18, k), dist = lerp(12.6, 8.4, E.inOutCubic(inv(3.9, 9.5, t)));
+  const ta = [lerp(0, -1.05, E.inOutCubic(inv(6.5, 8.2, t))), lerp(0.85, 0.72, E.inOutCubic(inv(3.9, 6, t))), 0];
+  return { ro: [Math.sin(yaw) * dist, ta[1] + lerp(2.4, 1.6, k), Math.cos(yaw) * dist], ta };
+}
+
+Reel.scene({
+  duration: 10, fps: 30,
+  fonts: ['500 26px "Noto Sans CJK SC"', '300 46px "Noto Sans CJK SC"', '500 24px "Latin Modern Mono"', '400 17px Inter'],
+  cues: [{ t: 0.4, sfx: 'pen' }, { t: 1.7, sfx: 'tick' }, { t: 2.1, sfx: 'tick' }, { t: 2.5, sfx: 'tick' }, { t: 3.9, sfx: 'whoosh' }, { t: 4.95, sfx: 'clink' },
+    { t: 5.25, sfx: 'data' }, { t: 6.6, sfx: 'swell' }, { t: 7.3, sfx: 'sparkle' }],
+  render(t) {
+    const cam = camAt(t);
+    const hx = 0.008 * Math.sin(t * 1.2), hy = 0.006 * Math.sin(t * 1.6 + 1);
+    const ro = [cam.ro[0] + hx, cam.ro[1] + hy, cam.ro[2]];
+    const asm = inv(3.85, 5.05, t); const ex = 1 - (asm < 1 ? E.inOutCubic(asm) : 1) + (asm >= 1 ? 0.02 * Math.exp(-(t - 5.05) * 9) * Math.sin((t - 5.05) * 40) : 0);
+    const scan = t < 5.25 ? -1 : t > 6.55 ? 2 : E.inOutSine(inv(5.25, 6.55, t)) * 1.02 - 0.01;
+    const yaw = lerp(0, 0.5, E.inOutSine(inv(6.4, 10, t)));
+    rm.set('uE', ex).set('uScan', scan).set('uReveal', lerp(-0.4, 7.5, E.inOutSine(inv(0.35, 2.7, t)))).set('uRo', ro).set('uTa', cam.ta).set('uYaw', yaw)
+      .set('uSweep', [lerp(-1.3, 1.3, E.inOutSine(inv(7.0, 8.6, t))), 3 * Math.sin(Math.PI * clamp(inv(7.0, 8.6, t)))]).set('uFade', E.outCubic(clamp(t / 0.4)));
+    const focus = Math.hypot(ro[0], ro[1] - 0.8, ro[2]);
+    rm.render(t, { focus, aperture: t > 6 ? 10 : 0, maxCoc: t > 6 ? 8 : 0 });
+    // overlay (clipped to the blueprint part, below the scan line)
+    obegin(); oc.clearRect(0, 0, 1920, 1080);
+    const M = camMatJS(ro, cam.ta);
+    const P = (x, y, z) => project(rotYJ([x, y, z], yaw), ro, M);
+    oc.save();
+    if (scan >= 0) { oc.beginPath(); oc.rect(0, Math.max(0, scan) * 1080, 1920, 1080); oc.clip(); }
+    const fadeOut = 1 - inv(3.7, 4.2, t) * 0.0;
+    centerAxis(P(0, 3.6 * ex + 2.4, 0), P(0, -1.0 - 1.1 * ex, 0), E.outCubic(inv(0.6, 1.4, t)));
+    const lab = [[P(0.32, 1.95 + 0.95 * ex, 0.3), 1, -1, 0], [P(0.4, 1.22 + 0.5 * ex, 0.12), 2, -1, 1], [P(-0.36, 0.7, 0.2), 3, -1, 2],
+      [P(0.62 + 0.38 * ex, 0.95 - 0.28 * ex, 0.05), 4, 1, 1], [P(0.75 + 0.9 * ex, 1.08, 0), 5, 1, 0], [P(0.55, -0.62 - 1.05 * ex, 0.3), 6, 1, 2]];
+    lab.forEach(([a, num, side, row], i) => callout(a, String(num), C.labels[num - 1], side, row, E.outCubic(inv(1.6 + i * 0.22, 2.3 + i * 0.22, t)) * (1 - inv(3.7, 4.1, t))));
+    const hk = E.outCubic(inv(2.6, 3.4, t)) * (1 - inv(3.7, 4.1, t));
+    if (hk > 0) {
+      dimLine(P(-0.44, 2.2 + 0.95 * ex, 0), P(0.44, 2.2 + 0.95 * ex, 0), 'Ø88', -46, hk);
+      dimLine(P(0.85, -0.69 - 1.05 * ex, 0), P(0.85, 2.56 + 0.95 * ex, 0), ex > 0.5 ? '462' : '286', 70, hk);
+    }
+    const ak = E.outCubic(inv(5.0, 5.3, t)) * (t < 5.25 ? 1 : 1);
+    if (ak > 0 && t < 6.6) dimLine(P(0.85, -0.69, 0), P(0.85, 2.56, 0), '286', 70, ak);
+    titleBlock(E.outCubic(inv(0.5, 1.1, t)));
+    oc.restore();
+    const ck = E.outCubic(inv(7.2, 8.0, t));
+    cap.style.opacity = ck; cap.style.transform = `translateY(${(1 - ck) * 16}px)`;
+  },
+});
+</script></body></html>

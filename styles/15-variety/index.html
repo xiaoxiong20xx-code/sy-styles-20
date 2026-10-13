@@ -1,0 +1,468 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>15 综艺花字 · Variety Captions</title>
+<script src="../../lib/core.js"></script><script src="../../lib/gl.js"></script><script src="../../lib/rm.js"></script>
+</head><body><div id="stage"></div>
+<script>
+/* ===== 15 综艺花字 · VARIETY CAPTIONS =====
+   "Footage": a raymarched cast-iron pan. An egg drops in, the white spreads and sets, bubbles and
+   crisps at the edge, pepper falls, a chopstick pokes the yolk and it runs. On top, the full variety-show
+   caption kit: multi-stroke gradient type with extrusion, onomatopoeia, emoji stickers with die-cut
+   borders, burst lines, zoom punches, flashes and a running subtitle. */
+const { E, clamp, inv, lerp } = Reel;
+const stage = Reel.makeStage('#120d0a');
+Reel.ownJitter = true;
+const C = Reel.cfg({ tag: '肖雄的厨房', handle: '@肖雄XIAOXIONG' });
+
+const rm = Reel.RM(stage, {
+  bloom: 0.42, th: 1.05, expo: 1.0, vig: 0.42, grain: 0.04, ca: 0.55, contrast: 1.1, sat: 1.12, lift: [0.01, 0.006, 0.0], gain: [1.03, 1.0, 0.95], bands: 8,
+  uniforms: `
+uniform vec3 uRo, uTa; uniform float uZoom;
+uniform float uSpread, uThick, uCook, uCrisp, uSeason, uT;
+uniform vec4 uYolk; uniform vec2 uYolkS; uniform vec4 uFlow;
+uniform vec4 uDrop; uniform vec4 uStick;`,
+  scene: `
+const vec3 LDIR = normalize(vec3(-.45,.72,-.52));
+const vec2 WC = vec2(-.04, .06);
+float whiteR(float a){
+  vec2 cs = vec2(cos(a), sin(a));
+  return uSpread*(1. + .2*(fbm2(cs*1.3 + 3.) - .5) + .03*sin(a*5. + 1.) + .015*sin(a*11.));
+}
+float whiteT(vec2 xz, float len, float R){
+  float T = uThick*(.5 + .5*smoothstep(R, R*.3, len));
+  float ly = length(xz - uYolk.xz);
+  T += .016*exp(-pow((ly - uYolk.w*1.25)/.07, 2.))*smoothstep(.0, .3, uSpread);   // thick albumen ring around the yolk
+  return T;
+}
+float sdWhite(vec3 p){
+  vec2 q = p.xz - WC;
+  float len = length(q), a = atan(q.y, q.x);
+  float R = whiteR(a);
+  float d2 = (len - R)*.9;
+  if (d2 > .1) return d2;
+  float T = whiteT(p.xz, len, R);
+  float edge = smoothstep(-.07, 0., d2);
+  T *= mix(1., .3, edge*uCrisp);
+  // crispy lace: holes and frills at the browned edge
+  float lace = (vnoise(vec3(q*36., 1.)) - .6)*.05*edge*uCrisp;
+  d2 = max(d2, lace);
+  // blisters while it sizzles
+  float bub = 0.;
+  if (uCook > .05){
+    vec2 g = q*22.; vec2 id = floor(g); vec2 f = fract(g) - .5;
+    float hb = hash12(id);
+    float life = fract(uT*(.6 + hb*.8) + hb*7.);
+    float rb = .45*smoothstep(0., .5, life)*(1. - step(.85, life))*step(.55, hb)*smoothstep(-.12, -.02, d2)*(1. - smoothstep(-.01, .0, d2));
+    bub = rb > 0. ? max(rb - length(f), 0.)/22.*.9 : 0.;
+  }
+  float e = .007;
+  vec2 w = vec2(d2 + e, p.y - (T + bub) + e);
+  return min(max(w.x, w.y), 0.) + length(max(w, 0.)) - e;
+}
+float sdYolk(vec3 p){
+  vec3 q = p - uYolk.xyz;
+  q.y /= uYolkS.x; q.xz *= sqrt(uYolkS.x);
+  float d = (length(q) - uYolk.w)*min(uYolkS.x, 1.);
+  d = max(d, -(p.y - .006));
+  if (uFlow.y > 0.){
+    vec2 dir = vec2(cos(uFlow.x), sin(uFlow.x));
+    vec2 r = p.xz - uYolk.xz;
+    float al = dot(r, dir), sd = dot(r, vec2(-dir.y, dir.x));
+    float u = clamp(al/uFlow.y, 0., 1.);
+    float wd = uFlow.z*(.55 + .45*sin(u*3.14159)) + .01;
+    float lobe2 = length(vec2(max(abs(al - uFlow.y*.5) - uFlow.y*.5, 0.), sd/(wd/uFlow.z)))*.8 - uFlow.z*.5;
+    lobe2 += (vnoise(vec3(r*22., 2.)) - .5)*.035;
+    float h = uFlow.w*(1. - u*.6);
+    float lobe = max(lobe2, p.y - (whiteT(p.xz, length(p.xz - WC), uSpread) + h));
+    d = smin(d, lobe, .05);
+  }
+  return d;
+}
+float sdPan(vec3 p){
+  float r = length(p.xz);
+  vec2 q = vec2(r - 1., p.y);
+  float fl = q.x < 0. ? abs(q.y + .018) : length(q - vec2(0., -.018));
+  vec2 c = vec2(0., .1);
+  float arc = (q.x > 0. && q.y < .1) ? abs(length(q - c) - .118) : 1e3;
+  vec2 a = vec2(.118, .1), b = vec2(.15, .23);
+  vec2 pa = q - a, ba = b - a; float hh = clamp(dot(pa, ba)/dot(ba, ba), 0., 1.);
+  float wall = length(pa - ba*hh);
+  float d = min(fl, min(arc, wall)) - .018;
+  // handle
+  vec3 hq = p - vec3(1.75, .2, 0.);
+  d = min(d, sdRoundBox(hq, vec3(.62, .03, .07), .025));
+  return d;
+}
+float sdStick(vec3 p){
+  if (uStick.w < .5) return 1e3;
+  vec3 tip = uStick.xyz;
+  vec3 dir = normalize(vec3(.62, .62, -.48));
+  vec3 a = tip, b = tip + dir*2.2;
+  vec3 pa = p - a, ba = b - a; float h = clamp(dot(pa, ba)/dot(ba, ba), 0., 1.);
+  return length(pa - ba*h) - mix(.014, .03, h);
+}
+float sdDrop(vec3 p){
+  if (uDrop.w <= 0.) return 1e3;
+  vec3 q = p - uDrop.xyz;
+  return sdEllipsoid(q, vec3(.16, .2, .16)*uDrop.w);
+}
+// materials: 1 pan  2 white  3 yolk  4 stick  5 counter  6 falling egg
+vec2 map(vec3 p){
+  vec2 r = vec2(sdPan(p), 1.);
+  float cnt = p.y + .32; if (cnt < r.x) r = vec2(cnt, 5.);
+  if (length(p.xz - WC) < uSpread*1.45 + .15 && p.y < .3){
+    float w = sdWhite(p); if (w < r.x) r = vec2(w, 2.);
+    float y = sdYolk(p); if (y < r.x) r = vec2(y, 3.);
+  }
+  float s = sdStick(p); if (s < r.x) r = vec2(s, 4.);
+  float dr = sdDrop(p); if (dr < r.x) r = vec2(dr, 6.);
+  return r;
+}
+float mapS(vec3 p){ return map(p).x; }
+vec3 nrm(vec3 p, float t){ vec2 k = vec2(1.,-1.)*(.0005 + .00025*t);
+  return normalize(k.xyy*mapS(p+k.xyy) + k.yyx*mapS(p+k.yyx) + k.yxy*mapS(p+k.yxy) + k.xxx*mapS(p+k.xxx)); }
+float shadow(vec3 ro){
+  float res = 1., t = .01;
+  for (int i=0;i<24;i++){ float h = mapS(ro + LDIR*t); res = min(res, 8.*h/t); t += clamp(h, .01, .2); if (res < .003 || t > 2.5) break; }
+  return clamp(res, 0., 1.);
+}
+float rect(vec3 r, vec3 c, vec2 hs, float soft){
+  float cz = dot(r, c); if (cz <= 0.) return 0.;
+  vec3 u = normalize(cross(vec3(0.,1.,0.), c)), v = cross(c, u); vec2 q = vec2(dot(r,u), dot(r,v))/cz;
+  vec2 e = smoothstep(hs + soft, hs - soft, abs(q)); return e.x*e.y;
+}
+vec3 env(vec3 r){
+  vec3 c = mix(vec3(.025,.02,.018), vec3(.07,.06,.055), smoothstep(-.2, .6, r.y));
+  c += vec3(1.,.93,.82)*9.*rect(r, LDIR, vec2(.26,.17), .06);                     // softbox, back left
+  c += vec3(.75,.85,1.)*2.2*rect(r, normalize(vec3(.8,.35,-.4)), vec2(.06,.5), .04);  // window strip
+  c += vec3(1.,.7,.4)*.6*rect(r, normalize(vec3(.3,.25,.9)), vec2(.5,.2), .3);        // warm bounce from the room
+  return c;
+}
+vec3 shade(vec3 p, vec3 rd, float m, float t){
+  vec3 n = nrm(p, t);
+  float ndl = dot(n, LDIR);
+  float sh = shadow(p + n*.002);
+  float fr = pow(1. - max(dot(n, -rd), 0.), 5.);
+  vec3 refl = env(reflect(rd, n));
+  if (m < 1.5){                                                      // seasoned cast iron + oil film
+    float oil = smoothstep(.0, .25, uSpread)*exp(-max(length(p.xz - WC) - uSpread, 0.)*3.)*.7 + .3;
+    vec3 nb = normalize(n + .005*(vec3(vnoise(p*25.), vnoise(p*25.+3.), vnoise(p*25.+7.)) - .5));
+    vec3 rf = env(reflect(rd, nb));
+    vec3 col = vec3(.028,.026,.025)*(.25 + .75*clamp(ndl, 0., 1.)*sh);
+    float F = .035 + .965*fr;
+    col += rf*F*mix(.35, 1., oil);
+    // tiny oil bubbles fizzing around the egg
+    float ring = length(p.xz - WC) - uSpread;
+    if (uCook > .05 && ring > 0. && ring < .1 && p.y < .02){
+      vec2 g = p.xz*70.; vec2 id = floor(g); float hb = hash12(id);
+      float life = fract(uT*(1.5 + hb) + hb*9.);
+      float bb = smoothstep(.22, .1, length(fract(g) - .5 - (hb - .5)*.3))*step(.7, hb)*(1. - life);
+      col += vec3(1.,.95,.85)*bb*1.6*smoothstep(.1, .0, ring);
+    }
+    return col;
+  }
+  if (m < 2.5){                                                      // egg white: translucent & glossy -> set & white
+    vec2 q = p.xz - WC;
+    float R = whiteR(atan(q.y, q.x));
+    float d2 = (length(q) - R);
+    float edge = smoothstep(-.1, -.005, d2);
+    vec3 cooked = vec3(.97,.955,.93);
+    float wrap = clamp((ndl + .5)/1.5, 0., 1.);
+    vec3 diff = cooked*(vec3(1.,.96,.9)*1.8*wrap*(.45 + .55*sh) + vec3(.35,.38,.45)*.5);
+    diff += cooked*vec3(1.,.85,.6)*.25*smoothstep(-.3, .2, ndl)*(1. - smoothstep(.2, .6, ndl));     // subsurface warmth
+    // browning: golden lace, dark crisp spots
+    float brown = clamp(edge*uCrisp*1.3*(.55 + .45*vnoise(vec3(q*25., 3.))), 0., 1.);
+    diff = mix(diff, vec3(.8,.47,.16)*1.5*wrap + .04, brown*.92);
+    diff = mix(diff, vec3(.3,.15,.06)*wrap, edge*uCrisp*smoothstep(.62, .8, vnoise(vec3(q*40., 5.)))*.8);
+    vec3 raw = vec3(.03,.028,.026)*.7 + vec3(.85,.88,.8)*.09*(.5 + .5*clamp(ndl, 0., 1.));   // clear, a little milky
+    vec3 col = mix(raw, diff, uCook);
+    float gloss = mix(1., .3, uCook);
+    col += refl*(.03 + .97*fr)*gloss*mix(1., .5, uCook);
+    // pepper + salt
+    float pep = step(.986, hash12(floor(p.xz*160.)))*uSeason;
+    col = mix(col, vec3(.04,.03,.02), pep);
+    float salt = step(.993, hash12(floor(p.xz*190.) + 7.))*uSeason;
+    col += vec3(1.)*salt*.8*(.5 + .5*sh);
+    return col;
+  }
+  if (m < 3.5){                                                      // yolk: glossy, translucent orange
+    vec3 base = vec3(1.,.55,.06);
+    float wrap = clamp((ndl + .6)/1.6, 0., 1.);
+    vec3 col = base*vec3(1.,.95,.85)*1.6*wrap*(.5 + .5*sh) + base*vec3(.3,.25,.2)*.4;
+    col += base*base*vec3(1.,.6,.2)*.9*smoothstep(-.4, .3, ndl)*(1. - smoothstep(.3, .8, ndl));        // subsurface glow
+    col += base*vec3(1.,.7,.3)*.6*pow(1. - max(dot(n, -rd), 0.), 2.);                                  // translucent rim
+    col += refl*(.05 + .9*fr) + vec3(1.,.97,.9)*pow(max(dot(n, normalize(LDIR - rd)), 0.), 220.)*14.*sh;
+    float pep = step(.988, hash12(floor(p.xz*160.)))*uSeason;
+    col = mix(col, vec3(.05,.03,.01), pep);
+    return col;
+  }
+  if (m < 4.5){                                                      // bamboo chopstick
+    float gr = .8 + .2*vnoise(vec3(p.x*6., p.y*6., p.z*80.));
+    vec3 a = vec3(.86,.68,.42)*gr;
+    return a*(1.6*clamp(ndl, 0., 1.)*sh + .3) + refl*.05;
+  }
+  if (m < 5.5){                                                      // stove top far below, out of focus
+    float grate = smoothstep(.04, .0, abs(fract(p.x*1.6) - .5) - .45)*.5;
+    return vec3(.03,.028,.03) + vec3(.6,.4,.25)*.05*grate + refl*.04;
+  }
+  // falling raw egg
+  vec3 col = vec3(.9,.85,.6)*.08 + refl*.3 + vec3(1.,.55,.08)*.6*smoothstep(.0, .12, .16*uDrop.w - length(p - uDrop.xyz - vec3(0.,-.02,0.))*.9);
+  return col;
+}
+vec3 render(vec2 fc){
+  vec2 uv = (2.*fc - uRes)/uRes.y;
+  vec3 ro = uRo;
+  vec3 rd = camMat(ro, uTa, 0.)*normalize(vec3(uv, 2.25*uZoom));
+  float t = .3; vec2 h = vec2(0.); bool hit = false;
+  for (int i=0;i<140;i++){
+    h = map(ro + rd*t);
+    if (abs(h.x) < .0003*t){ hit = true; break; }
+    t += h.x*.85;
+    if (t > 9.) break;
+  }
+  if (!hit){ gDepth = 9.; return vec3(.02); }
+  gDepth = t;
+  return shade(ro + rd*t, rd, h.y, t);
+}`,
+});
+
+/* ---------------- caption overlay (2D) ---------------- */
+const RS = Reel.RS;
+const W = Math.round(1920 * RS), H = Math.round(1080 * RS), K = W / 1920;
+const ov = document.createElement('canvas'); ov.width = W; ov.height = H;
+ov.style.cssText = 'position:absolute;left:0;top:0;width:1920px;height:1080px';
+stage.appendChild(ov);
+const g0 = ov.getContext('2d');
+const lay = document.createElement('canvas'); lay.width = W; lay.height = H;
+let g = g0;
+const FONT = '"Noto Sans CJK SC"';
+function vText(str, x, y, size, o = {}) {
+  const { fill = ['#fff7a8', '#ffb21e'], s1 = '#3a1060', s2 = '#ffffff', s3 = null, depth = 10, depthCol = '#22083a', rot = 0, sc = 1, alpha = 1, weight = 900, gloss = true, spacing = 0 } = o;
+  if (sc <= 0.001 || alpha <= 0.001) return;
+  const main = g; g = lay.getContext('2d'); g.clearRect(0, 0, W, H);
+  g.save();
+  g.translate(x * K, y * K); g.rotate(rot); g.scale(sc, sc);
+  const fs = size * K;
+  g.font = `${weight} ${fs}px ${FONT}`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.lineJoin = 'round'; g.miterLimit = 2;
+  if ('letterSpacing' in g) g.letterSpacing = (spacing * K).toFixed(1) + 'px';
+  const w1 = fs * 0.34, w2 = fs * 0.2, w3 = fs * 0.075;
+  // extrusion
+  g.strokeStyle = depthCol; g.fillStyle = depthCol; g.lineWidth = w1;
+  for (let i = depth; i >= 1; i -= 1) { const dx = i * 0.55 * K, dy = i * 0.9 * K; g.strokeText(str, dx, dy); }
+  g.strokeStyle = s1; g.lineWidth = w1; g.strokeText(str, 0, 0);
+  g.strokeStyle = s2; g.lineWidth = w2; g.strokeText(str, 0, 0);
+  if (s3) { g.strokeStyle = s3; g.lineWidth = w3; g.strokeText(str, 0, 0); }
+  const gr = g.createLinearGradient(0, -fs * 0.5, 0, fs * 0.5);
+  gr.addColorStop(0, fill[0]); gr.addColorStop(0.55, fill[1]); gr.addColorStop(1, fill[2] || fill[1]);
+  g.fillStyle = gr; g.fillText(str, 0, 0);
+  if (gloss) {   // glossy band over the top half
+    g.globalCompositeOperation = 'source-atop';
+    const hg = g.createLinearGradient(0, -fs * 0.5, 0, fs * 0.1);
+    hg.addColorStop(0, 'rgba(255,255,255,.55)'); hg.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = hg; g.fillRect(-fs * 8, -fs * 0.6, fs * 16, fs * 0.62);
+  }
+  g.restore();
+  g = main; g.save(); g.globalAlpha = alpha; g.drawImage(lay, 0, 0); g.restore();
+}
+// emoji stickers with a die-cut white border
+const stickerCache = {};
+function sticker(em, x, y, size, rot = 0, sc = 1, alpha = 1) {
+  if (sc <= 0.001) return;
+  const key = em + size;
+  let c = stickerCache[key];
+  if (!c) {
+    const s = Math.ceil(size * K * 1.5), pad = Math.ceil(size * K * 0.12);
+    const e = document.createElement('canvas'); e.width = e.height = s + pad * 2;
+    const ec = e.getContext('2d'); ec.font = `${size * K}px "Noto Color Emoji"`; ec.textAlign = 'center'; ec.textBaseline = 'middle';
+    ec.fillText(em, e.width / 2, e.height / 2 + size * K * 0.06);
+    const m = document.createElement('canvas'); m.width = m.height = e.width;
+    const mc = m.getContext('2d'); mc.drawImage(e, 0, 0); mc.globalCompositeOperation = 'source-in'; mc.fillStyle = '#fff'; mc.fillRect(0, 0, m.width, m.height);
+    c = document.createElement('canvas'); c.width = c.height = e.width;
+    const cc = c.getContext('2d');
+    cc.shadowColor = 'rgba(0,0,0,.35)'; cc.shadowBlur = pad * 0.8; cc.shadowOffsetY = pad * 0.3;
+    for (let a = 0; a < 16; a++) cc.drawImage(m, Math.cos(a / 16 * Math.PI * 2) * pad * 0.8, Math.sin(a / 16 * Math.PI * 2) * pad * 0.8);
+    cc.shadowColor = 'transparent';
+    cc.drawImage(e, 0, 0);
+    stickerCache[key] = c;
+  }
+  g.save(); g.globalAlpha = alpha; g.translate(x * K, y * K); g.rotate(rot); g.scale(sc, sc);
+  g.drawImage(c, -c.width / 2, -c.height / 2); g.restore();
+}
+function burst(x, y, r0, r1, n, rot, alpha, cols = ['rgba(255,236,120,', 'rgba(255,255,255,']) {
+  g.save(); g.translate(x * K, y * K); g.rotate(rot);
+  for (let i = 0; i < n; i++) {
+    const a0 = i / n * Math.PI * 2, a1 = a0 + Math.PI / n * 0.9;
+    g.fillStyle = cols[i % 2] + alpha + ')';
+    g.beginPath(); g.moveTo(Math.cos(a0) * r0 * K, Math.sin(a0) * r0 * K); g.lineTo(Math.cos(a0) * r1 * K, Math.sin(a0) * r1 * K); g.lineTo(Math.cos(a1) * r1 * K, Math.sin(a1) * r1 * K); g.lineTo(Math.cos(a1) * r0 * K, Math.sin(a1) * r0 * K); g.fill();
+  }
+  g.restore();
+}
+function spark(x, y, r, col, rot = 0) {
+  g.save(); g.translate(x * K, y * K); g.rotate(rot); g.fillStyle = col; g.beginPath();
+  for (let i = 0; i < 8; i++) { const a = i / 8 * Math.PI * 2, rr = (i % 2 ? 0.22 : 1) * r * K; g.lineTo(Math.cos(a) * rr, Math.sin(a) * rr); }
+  g.fill(); g.restore();
+}
+function subtitle(str, alpha) {
+  if (alpha <= 0) return;
+  g.save(); g.globalAlpha = alpha;
+  g.font = `700 ${46 * K}px ${FONT}`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.lineJoin = 'round';
+  g.strokeStyle = 'rgba(0,0,0,.85)'; g.lineWidth = 9 * K; g.strokeText(str, 960 * K, 985 * K);
+  g.fillStyle = '#fff'; g.fillText(str, 960 * K, 985 * K);
+  g.restore();
+}
+function tagPill() {
+  g.save();
+  const x = 64 * K, y = 58 * K, h = 64 * K;
+  g.font = `900 ${34 * K}px ${FONT}`;
+  const w = g.measureText(C.tag).width + 110 * K;
+  g.fillStyle = 'rgba(255,92,72,.95)'; g.beginPath(); g.roundRect(x, y, w, h, h / 2); g.fill();
+  g.strokeStyle = '#fff'; g.lineWidth = 4 * K; g.stroke();
+  g.fillStyle = '#fff'; g.textBaseline = 'middle'; g.fillText(C.tag, x + 84 * K, y + h / 2 + 1 * K);
+  g.restore();
+  sticker('🍳', 64 + 40, 58 + 32, 40, -0.1, 1);
+}
+const popIn = (t, t0, d = 0.32) => (t < t0 ? 0 : E.outBack(clamp((t - t0) / d), 2.2));
+const popOut = (t, t1, d = 0.18) => 1 - E.inQuad(clamp((t - t1) / d));
+
+/* ---------------- footage animation ---------------- */
+const HIT = 0.62, POKE = 7.25;
+function eggState(t) {
+  const s = {};
+  const u = Math.max(0, t - HIT);
+  // spread with a little overshoot ripple, volume conserved
+  const R1 = 0.47;
+  s.spread = t < HIT ? 0.0 : R1 * (1 - Math.exp(-u * 5.5) * Math.cos(u * 9) * 0.92) * clamp(u / 0.04) + (t < HIT ? 0 : 0.0001);
+  s.spread = Math.max(s.spread, 0.0001);
+  s.thick = t < HIT ? 0 : clamp(0.04 * Math.pow(0.47 / Math.max(s.spread, 0.12), 1.6), 0.03, 0.09);
+  s.cook = E.inOutSine(clamp((t - 1.6) / 3.2));
+  s.crisp = E.inOutSine(clamp((t - 2.9) / 2.8));
+  s.season = clamp((t - 5.25) / 0.9);
+  // yolk: lands, wobbles, then is poked and runs
+  const jig = t < HIT ? 1 : 1 - 0.32 * Math.exp(-u * 5) * Math.cos(u * 22);
+  const deflate = t < POKE ? 1 : lerp(1, 0.62, E.outCubic(clamp((t - POKE) / 0.9)));
+  s.yolkS = [jig * deflate, 0];
+  const yr = 0.155;
+  s.yolk = [0.06, s.thick * 0.55 + yr * 0.42 * jig * deflate, -0.02, t < HIT ? 0.0001 : yr];
+  const fl = clamp((t - POKE - 0.08) / 1.6);
+  s.flow = t < POKE + 0.08 ? [0, 0, 0, 0] : [1.1, 0.06 + 0.27 * E.outCubic(fl), 0.07 + 0.09 * E.outCubic(fl), 0.026 * (1 - 0.45 * fl)];
+  // falling egg
+  s.drop = t < HIT ? [0.0, lerp(1.35, 0.12, E.inQuad(clamp((t - 0.25) / (HIT - 0.25)))), 0.02, t > 0.25 ? 1 : 0] : [0, -5, 0, 0];
+  // chopstick
+  if (t > 6.55 && t < 8.3) {
+    const a = E.inOutSine(clamp((t - 6.55) / 0.6)), b = E.inOutSine(clamp((t - 7.7) / 0.5));
+    const tip = [lerp(0.6, 0.075, a), lerp(0.75, s.yolk[1] + 0.05, a) - (t > POKE - 0.05 && t < 7.7 ? 0.05 : 0) + b * 0.6, lerp(-0.25, -0.03, a) - b * 0.3];
+    s.stick = [...tip, 1];
+  } else s.stick = [0, 5, 0, 0];
+  return s;
+}
+function camAt(t) {
+  const hx = 0.006 * Math.sin(t * 1.3) + 0.004 * Math.sin(t * 3.1 + 1), hy = 0.005 * Math.sin(t * 1.7 + 2);
+  const push = E.inOutSine(clamp((t - 6.3) / 1.2)) * 0.35 - E.inOutSine(clamp((t - 8.6) / 1.2)) * 0.2;
+  return { p: [0.1 + hx, 1.18 - push * 0.42 + hy, 1.16 - push * 0.36], a: [0.04, 0.02, 0.0] };
+}
+const punch = (t, t0, amt) => (t < t0 ? 0 : amt * Math.exp(-(t - t0) * 7));
+
+Reel.scene({
+  duration: 10, fps: 30,
+  fonts: [`900 80px ${FONT}`, `700 46px ${FONT}`, '40px "Noto Color Emoji"'],
+  cues: [{ t: 0.6, sfx: 'splash' }, { t: 0.66, sfx: 'impact' }, { t: 1.45, sfx: 'pop' }, { t: 2.6, sfx: 'sizzle' }, { t: 5.0, sfx: 'sticker' },
+    { t: 5.95, sfx: 'pop' }, { t: 6.5, sfx: 'riser_short' }, { t: 7.25, sfx: 'impact' }, { t: 7.3, sfx: 'sparkle' }, { t: 8.6, sfx: 'stamp' }, { t: 8.9, sfx: 'laugh' }],
+  render(t) {
+    const s = eggState(t);
+    const cam = camAt(t);
+    const z = 1 + punch(t, HIT + 0.02, 0.12) + punch(t, POKE, 0.16) + E.inOutSine(clamp((t - 7.25) / 0.2)) * 0.06 * (1 - E.inOutSine(clamp((t - 8.4) / 0.6)));
+    const sh = punch(t, HIT + 0.02, 1) + punch(t, POKE, 1);
+    const ro = [cam.p[0] + Math.sin(t * 61) * 0.012 * sh, cam.p[1] + Math.cos(t * 53) * 0.01 * sh, cam.p[2]];
+    rm.set('uRo', ro).set('uTa', cam.a).set('uZoom', z)
+      .set('uSpread', s.spread).set('uThick', s.thick).set('uCook', s.cook).set('uCrisp', s.crisp).set('uSeason', s.season).set('uT', t)
+      .set('uYolk', s.yolk).set('uYolkS', s.yolkS).set('uFlow', s.flow).set('uDrop', s.drop).set('uStick', s.stick);
+    const fd = Math.hypot(ro[0] - 0.06, ro[1] - 0.1, ro[2] + 0.02);
+    rm.render(t, { focus: fd, aperture: 30, maxCoc: 16, expo: 1 + 0.6 * punch(t, HIT, 1) + 0.9 * punch(t, POKE, 1) - 0.18 * E.inOutSine(clamp((t - 6.5) / 0.4)) * (1 - E.inOutSine(clamp((t - 7.2) / 0.1))) });
+
+    /* -------- captions -------- */
+    g = g0; g.clearRect(0, 0, W, H);
+    // steam
+    if (t > 2.4) {
+      g.save(); g.filter = `blur(${16 * K}px)`; g.globalCompositeOperation = 'screen';
+      for (let i = 0; i < 6; i++) {
+        const ph = (t * 0.35 + i / 6) % 1, x = 760 + i * 70 + Math.sin(t * 0.9 + i) * 40, y = 640 - ph * 520;
+        g.fillStyle = `rgba(255,255,255,${0.16 * Math.sin(ph * Math.PI) * clamp((t - 2.4) / 1)})`;
+        g.beginPath(); g.ellipse(x * K, y * K, (60 + ph * 90) * K, (40 + ph * 50) * K, Math.sin(i + t) * 0.5, 0, Math.PI * 2); g.fill();
+      }
+      g.restore();
+    }
+    // pepper falling
+    if (t > 5.0 && t < 6.4) {
+      for (let i = 0; i < 70; i++) {
+        const st = 5.0 + (i % 23) * 0.04, u = t - st; if (u < 0) continue;
+        const x = 860 + ((i * 37) % 240) + Math.sin(i) * 20, y = 120 + u * 900 + ((i * 53) % 80);
+        if (y > 640) continue;
+        g.fillStyle = i % 5 === 0 ? 'rgba(255,255,255,.9)' : 'rgba(25,20,15,.95)';
+        g.fillRect(x * K, y * K, 4 * K, 9 * K);
+      }
+    }
+    // flash on the hits
+    const fl = Math.max(punch(t, HIT, 0.75), punch(t, POKE, 0.9));
+    if (fl > 0.02) { g.fillStyle = `rgba(255,255,255,${fl * 0.55})`; g.fillRect(0, 0, W, H); }
+
+    tagPill();
+    // 1. 啪嗒！ impact
+    { const a = popIn(t, HIT + 0.02, 0.28), o = popOut(t, 1.75);
+      if (a > 0 && o > 0) {
+        burst(1330, 360, 70, 300, 18, t * 0.4, 0.55 * o);
+        vText('啪嗒！', 1330, 360, 168, { sc: a * o, rot: -0.12 + Math.sin(t * 9) * 0.02, fill: ['#ffffff', '#ffe23a', '#ff8a00'], s1: '#2a0a4a', s2: '#ffffff', s3: '#ff3d6e', depth: 12 });
+        spark(1530, 240, 34 * a, '#fff6a0', t); spark(1150, 250, 22 * a, '#ffffff', -t); } }
+    // 2. 完美落锅 + 👌
+    { const a = popIn(t, 1.4), o = popOut(t, 2.8);
+      if (a > 0 && o > 0) {
+        vText('完美落锅', 560, 300, 104, { sc: a * o, rot: 0.06, fill: ['#e6fff8', '#56f0c8', '#12a88a'], s1: '#06343a', s2: '#ffffff', depth: 8, depthCol: '#04262a' });
+        sticker('👌', 820, 220, 92, 0.25 + Math.sin(t * 6) * 0.08, a * o); } }
+    // 3. 滋滋滋～ (each character jitters)
+    { const a = popIn(t, 2.6, 0.25), o = popOut(t, 5.0);
+      if (a > 0 && o > 0) {
+        [...'滋滋滋～'].forEach((ch, i) => {
+          const ai = popIn(t, 2.6 + i * 0.09, 0.25);
+          const jx = Math.sin(t * 31 + i * 2) * 5, jy = Math.cos(t * 27 + i) * 5;
+          vText(ch, 300 + i * 118 + jx, 790 + jy + Math.sin(t * 6 + i) * 10, 120, { sc: ai * o, rot: (i % 2 ? 0.12 : -0.1), fill: ['#fff2c4', '#ff9a2e', '#ff4d1f'], s1: '#3b0d00', s2: '#ffffff', depth: 7, depthCol: '#2a0700' });
+        });
+        vText('这声音太治愈了', 1470, 250, 62, { sc: popIn(t, 3.1) * o, rot: -0.04, fill: ['#ffffff', '#ffe0f0', '#ff8cc6'], s1: '#5a1040', s2: '#ffffff', depth: 5, depthCol: '#3a0828', gloss: false });
+        sticker('🤤', 1720, 180, 86, -0.2 + Math.sin(t * 5) * 0.06, popIn(t, 3.25) * o); } }
+    // 4. 撒一点黑胡椒 ✨ / 边边焦脆！ 🔥
+    { const a = popIn(t, 5.0), o = popOut(t, 6.3);
+      if (a > 0 && o > 0) {
+        vText('撒一点黑胡椒', 960, 150, 78, { sc: a * o, fill: ['#ffffff', '#fff3a6', '#ffcf3a'], s1: '#1f1f1f', s2: '#ffffff', depth: 6, depthCol: '#000000' });
+        sticker('✨', 1265, 125, 70, 0.2, a * o); }
+      const b = popIn(t, 5.9), ob = popOut(t, 6.8);
+      if (b > 0 && ob > 0) {
+        vText('边边焦脆！', 1400, 760, 112, { sc: b * ob, rot: -0.08, fill: ['#fff1b8', '#ffa000', '#d23b00'], s1: '#3a0e00', s2: '#ffffff', s3: '#ff5a1f', depth: 9, depthCol: '#2a0800' });
+        sticker('🔥', 1690, 660, 96, 0.15 + Math.sin(t * 10) * 0.07, b * ob); } }
+    // 5. suspense
+    { const a = popIn(t, 6.55, 0.3), o = popOut(t, 7.2, 0.08);
+      if (a > 0 && o > 0) {
+        vText('最关键的一步……', 960, 190, 70, { sc: a * o, fill: ['#ffffff', '#dfe7ff', '#9fb2ff'], s1: '#10173a', s2: '#ffffff', depth: 5, depthCol: '#060a20', gloss: false });
+        sticker('👀', 1285, 170, 70, 0, a * o); } }
+    // 6. 流心了！！！
+    { const a = popIn(t, POKE + 0.02, 0.3), o = popOut(t, 8.55);
+      if (a > 0 && o > 0) {
+        burst(960, 360, 90, 760, 28, -t * 0.3, 0.5 * o, ['rgba(255,214,64,', 'rgba(255,255,255,']);
+        vText('流心了！！！', 960, 360, 196, { sc: a * o * (1 + Math.sin(t * 14) * 0.015), rot: -0.05, fill: ['#fffbd0', '#ffd21e', '#ff7a00'], s1: '#4a0f00', s2: '#ffffff', s3: '#ff3d3d', depth: 14, depthCol: '#2e0800' });
+        sticker('😍', 380, 250, 130, -0.25 + Math.sin(t * 7) * 0.08, popIn(t, POKE + 0.15) * o);
+        sticker('🥚', 1560, 560, 110, 0.3, popIn(t, POKE + 0.25) * o);
+        for (let i = 0; i < 9; i++) { const a2 = i / 9 * Math.PI * 2 + t * 0.6, r = 330 + 60 * Math.sin(t * 3 + i); spark(960 + Math.cos(a2) * r * 1.5, 360 + Math.sin(a2) * r * 0.55, (18 + 14 * Math.sin(t * 9 + i)) * a, i % 2 ? '#fff7b0' : '#ffffff', t * 2 + i); } } }
+    // 7. 完美溏心蛋 ★★★★★
+    { const a = popIn(t, 8.6, 0.3);
+      if (a > 0) {
+        vText('完美溏心蛋', 960, 300, 132, { sc: a, rot: 0.03, fill: ['#ffffff', '#ffe58a', '#ffb000'], s1: '#5a1a00', s2: '#ffffff', s3: '#ff6b2b', depth: 11, depthCol: '#331000' });
+        for (let k = 0; k < 5; k++) { const b = popIn(t, 8.85 + k * 0.08, 0.25); vText('★', 760 + k * 100, 445, 84, { sc: b, fill: ['#fffbd0', '#ffd21e', '#ff9d00'], s1: '#5a1a00', s2: '#ffffff', depth: 5, depthCol: '#331000', gloss: false }); }
+        // round "满分" stamp
+        const sb = popIn(t, 9.25, 0.25);
+        if (sb > 0) { g.save(); g.translate(1530 * K, 270 * K); g.rotate(-0.25); g.scale(sb * (1 + 0.6 * Math.exp(-(t - 9.25) * 9)), sb * (1 + 0.6 * Math.exp(-(t - 9.25) * 9)));
+          g.strokeStyle = '#ff2b3d'; g.lineWidth = 9 * K; g.beginPath(); g.arc(0, 0, 92 * K, 0, Math.PI * 2); g.stroke(); g.lineWidth = 3 * K; g.beginPath(); g.arc(0, 0, 76 * K, 0, Math.PI * 2); g.stroke();
+          g.fillStyle = '#ff2b3d'; g.font = `900 ${58 * K}px ${FONT}`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('满分', 0, 2 * K); g.restore(); } } }
+    // subtitles + handle
+    const subs = [[0.15, 2.5, '今天来煎一颗完美的溏心蛋'], [2.6, 4.95, '油温到了，蛋白开始冒泡'], [5.0, 6.45, '小火慢煎，边缘才会焦脆'], [7.25, 8.55, '筷子一戳，蛋黄直接流出来'], [8.6, 10.1, '学会了吗？评论区告诉我～']];
+    for (const [a, b, str] of subs) if (t >= a && t < b) subtitle(str, clamp((t - a) / 0.12) * (1 - clamp((t - b + 0.1) / 0.1)));
+    g.save(); g.font = `700 ${30 * K}px ${FONT}`; g.textAlign = 'right'; g.fillStyle = 'rgba(255,255,255,.85)'; g.shadowColor = 'rgba(0,0,0,.6)'; g.shadowBlur = 6 * K;
+    g.fillText(C.handle, 1860 * K, 92 * K); g.restore();
+  },
+});
+</script></body></html>
