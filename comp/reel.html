@@ -1,0 +1,448 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>Style Reel · 20 种视频风格</title>
+<script src="../lib/core.js"></script><script src="meta.js"></script><script src="balls.js"></script>
+<style>
+  #stage{font-family:'Noto Sans CJK SC',sans-serif;color:#fff}
+  .abs{position:absolute}
+  .panel{position:absolute;top:198px;width:480px;height:684px}
+  .panel .top{position:absolute;left:0;top:-6px;width:480px}
+  .num{display:flex;align-items:baseline;gap:12px;height:104px}
+  .num .n{font:800 112px 'Inter Display';letter-spacing:-.035em;line-height:.9}
+  .num .of{font:600 26px Inter;color:rgba(255,255,255,.38)}
+  .num .bonus{align-self:center;margin-left:8px;font-size:17px;font-weight:700;letter-spacing:.06em;padding:6px 14px;border-radius:999px}
+  .ttl{margin-top:22px}
+  .ttl .ln{overflow:hidden;height:86px}
+  .ttl .ln span{display:block;font-weight:900;font-size:72px;line-height:86px;letter-spacing:.01em;white-space:nowrap}
+  .en{margin-top:14px;font:600 17px Inter;letter-spacing:.32em;color:rgba(255,255,255,.5);white-space:nowrap}
+  .bar{margin:26px 0 24px;width:56px;height:5px;border-radius:3px}
+  .desc{font-size:24px;line-height:1.72;color:rgba(255,255,255,.80);width:470px;font-weight:400;text-wrap:pretty}
+  .tags{margin-top:26px;display:flex;flex-wrap:wrap;gap:10px}
+  .tags span{font-size:18px;padding:7px 15px 7px 13px;border-radius:999px;border:1.5px solid rgba(255,255,255,.2);color:rgba(255,255,255,.88);display:flex;align-items:center;gap:8px;white-space:nowrap}
+  .tags span i{width:7px;height:7px;border-radius:50%;display:block}
+  .pal{margin-top:26px;display:flex;align-items:center;gap:16px}
+  .pal .lbl{font:600 13px Inter;letter-spacing:.3em;color:rgba(255,255,255,.42)}
+  .pal .sw{display:flex;gap:9px}
+  .pal .sw i{width:28px;height:28px;border-radius:50%;display:block;box-shadow:0 0 0 2px rgba(255,255,255,.14)}
+  .prog{position:absolute;left:0;bottom:0;width:480px}
+  .prog .row{display:flex;justify-content:space-between;font:600 13px Inter;letter-spacing:.22em;color:rgba(255,255,255,.42);margin-bottom:12px}
+  .prog .track{height:3px;border-radius:2px;background:rgba(255,255,255,.12);overflow:hidden}
+  .prog .fill{height:100%;width:0}
+  #hdr{position:absolute;left:80px;right:80px;top:84px;height:30px;display:flex;align-items:center;justify-content:space-between}
+  #hdr .brand{font:700 15px Inter;letter-spacing:.34em;color:rgba(255,255,255,.55)}
+  #hdr .segs{display:flex;gap:6px}
+  #hdr .segs i{display:block;width:24px;height:4px;border-radius:2px;background:rgba(255,255,255,.14);overflow:hidden;position:relative}
+  #hdr .segs i b{position:absolute;left:0;top:0;bottom:0;width:0}
+  #intro,#outro{position:absolute;inset:0}
+</style></head>
+<body><div id="stage"></div>
+<script>
+const { E, clamp, inv, spring, lerp, Q } = Reel;
+const ids = (Q.get('ids') || META.map((m) => m.id).join(',')).split(',');
+const S = ids.map((id) => META.find((m) => m.id === id));
+const NALL = META.length;
+const INTRO = 4, BLOCK = 10, OUTRO = 6, FPS = 30;
+const DUR = INTRO + S.length * BLOCK + OUTRO;
+const WIN = { w: 1216, h: 684, y: 198, xL: 80, xR: 624 };
+const PANX = { L: 80, R: 1360 };
+const BR = 46, FLOOR = 990, RMAX = Math.hypot(608, 342) + 6;
+// transition timing relative to a block boundary (tau = 0 = landing on the downbeat)
+const TT = { C0: -1.28, C1: -0.98, H1: -0.73, H2: -0.48 };
+const G = 2 * (FLOOR - 540) / Math.pow(TT.H1 - TT.C1, 2);
+
+const stage = Reel.makeStage('#0c0d11');
+const bg = Reel.canvas2d(stage);
+stage.insertAdjacentHTML('beforeend', `
+  <div class="panel" id="panel0"></div><div class="panel" id="panel1"></div>
+  <div id="hdr"><div class="brand">XIAOXIONG · STYLE REEL</div><div class="segs"></div></div>
+  <div id="intro">
+    <div id="iNum" class="abs" style="font:900 360px 'Inter Display';letter-spacing:-.01em;line-height:1;top:330px;white-space:nowrap"></div>
+    <div id="iName" class="abs" style="font-weight:900;font-size:64px;top:720px;white-space:nowrap"></div>
+    <div id="iTtl" class="abs" style="font-weight:900;font-size:118px;letter-spacing:.02em;white-space:nowrap;top:395px;overflow:hidden;height:150px"><div>种视频风格</div></div>
+    <div id="iSub" class="abs" style="font-weight:500;font-size:42px;letter-spacing:.14em;color:rgba(244,242,238,.66);white-space:nowrap;top:568px;overflow:hidden;height:64px"><div>每一帧，都是代码算出来的</div></div>
+    <div id="iKick" class="abs" style="font:600 18px Inter;letter-spacing:.42em;color:rgba(244,242,238,.5);top:356px">XIAOXIONG · STYLE REEL 2026</div>
+  </div>
+  <div id="outro">
+    <div class="abs" style="left:0;right:0;top:330px;height:140px;overflow:hidden;text-align:center"><div id="oQ" style="font-weight:900;font-size:112px;letter-spacing:.03em">你最想用哪一种？</div></div>
+    <div class="abs" style="left:0;right:0;top:668px;height:70px;overflow:hidden;text-align:center"><div id="oSub" style="font-weight:500;font-size:44px;letter-spacing:.2em;color:rgba(244,242,238,.7)">评论区告诉我</div></div>
+    <div id="oSign" class="abs" style="left:0;right:0;top:930px;text-align:center;font:700 22px Inter;color:rgba(244,242,238,.55)">XIAOXIONG</div>
+    <div id="oBlack" class="abs" style="inset:0;background:#000;opacity:0"></div>
+  </div>`);
+const fx = Reel.canvas2d(stage);
+fx.cv.style.pointerEvents = 'none';
+stage.appendChild(document.getElementById('oBlack'));   // black fade sits above everything
+const $ = (s) => stage.querySelector(s);
+const PANELS = [$('#panel0'), $('#panel1')];
+const segs = META.map((m) => { const i = document.createElement('i'); const b = document.createElement('b'); b.style.background = m.accent; i.appendChild(b); $('#hdr .segs').appendChild(i); return b; });
+
+const hexA = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16 & 255},${n >> 8 & 255},${n & 255},${a})`; };
+const sideOf = (k) => (k % 2 === 0 ? 'L' : 'R');
+const winX = (k) => (sideOf(k) === 'L' ? WIN.xL : WIN.xR);
+const winC = (k) => ({ x: winX(k) + WIN.w / 2, y: WIN.y + WIN.h / 2 });
+const pad = (n, w = 2) => String(n).padStart(w, '0');
+const numOf = (m) => META.indexOf(m) + 1;
+
+// ---------- info panel ----------
+const PST = [{ k: -2, els: [] }, { k: -2, els: [] }];
+const PIN = 0.75;    // the next card starts sliding in while the ball is still bouncing
+function buildPanel(k) {
+  const m = S[k], panel = PANELS[k % 2], st = PST[k % 2];
+  panel.style.left = (sideOf(k) === 'L' ? PANX.R : PANX.L) + 'px';
+  panel.innerHTML = `<div class="top">
+    <div class="num"><span class="n" style="color:${m.accent}">${pad(numOf(m))}</span><span class="of">/ ${NALL}</span>${m.bonus ? `<span class="bonus" style="background:${hexA(m.accent, .18)};color:${m.accent}">推荐 · 适合口播</span>` : ''}</div>
+    <div class="ttl">${m.zh.map((l) => `<div class="ln"><span>${l}</span></div>`).join('')}</div>
+    <div class="en">${m.en}</div>
+    <div class="bar" style="background:${m.accent}"></div>
+    <div class="desc">${m.desc}</div>
+    <div class="tags">${m.tags.map((g) => `<span><i style="background:${m.accent}"></i>${g}</span>`).join('')}</div>
+    <div class="pal"><div class="lbl">PALETTE</div><div class="sw">${m.palette.map((c) => `<i style="background:${c}"></i>`).join('')}</div></div>
+  </div>
+  <div class="prog"><div class="row"><span>NOW PLAYING</span><span class="tc">00:00 / 00:10</span></div><div class="track"><div class="fill" style="background:${m.accent}"></div></div></div>`;
+  st.els = [
+    { el: panel.querySelector('.num'), d: 0.12 }, ...[...panel.querySelectorAll('.ttl .ln span')].map((el, i) => ({ el, d: 0.22 + i * 0.08, mask: true })),
+    { el: panel.querySelector('.en'), d: 0.36 }, { el: panel.querySelector('.bar'), d: 0.42, bar: true }, { el: panel.querySelector('.desc'), d: 0.5, wipe: true },
+    ...[...panel.querySelectorAll('.tags span')].map((el, i) => ({ el, d: 0.72 + i * 0.07, pop: true })),
+    { el: panel.querySelector('.pal .lbl'), d: 0.9 }, ...[...panel.querySelectorAll('.pal .sw i')].map((el, i) => ({ el, d: 0.95 + i * 0.05, pop: true })),
+    { el: panel.querySelector('.prog'), d: 1.0 },
+  ];
+  st.k = k;
+}
+function updatePanel(k, tb) {
+  const panel = PANELS[k % 2], st = PST[k % 2];
+  if (st.k !== k) buildPanel(k);
+  panel.style.display = 'block';
+  const t = tb + PIN;
+  const n = st.els.length;
+  st.els.forEach((p, i) => {
+    const a = E.outCubic(inv(p.d, p.d + 0.5, t));
+    const outD = 8.5 + PIN + (n - 1 - i) * 0.012;
+    const o = E.inCubic(inv(outD, outD + 0.32, t));
+    let tf = '';
+    if (p.mask) tf = `translateY(${(1 - a) * 90}px)`;
+    else if (p.pop) tf = `scale(${0.6 + 0.4 * E.outBack(inv(p.d, p.d + 0.4, t), 2.6)})`;
+    else if (p.bar) { p.el.style.width = 56 * a + 'px'; }
+    else tf = `translateY(${(1 - a) * 26}px)`;
+    if (p.wipe) p.el.style.clipPath = `inset(0 0 ${(1 - E.inOutCubic(inv(p.d, p.d + 0.7, t))) * 100}% 0)`;
+    p.el.style.transform = tf + ` translateY(${-o * 18}px)`;
+    p.el.style.opacity = (p.mask || p.wipe ? 1 : clamp(a * 1.4)) * (1 - o);
+  });
+  const fill = panel.querySelector('.fill'), tc = panel.querySelector('.tc');
+  fill.style.width = clamp(tb / BLOCK) * 100 + '%';
+  tc.textContent = `00:${pad(Math.max(0, Math.min(10, Math.floor(tb))))} / 00:10`;
+}
+
+// ---------- background ----------
+const dots = document.createElement('canvas'); dots.width = 1920; dots.height = 1080;
+{ const c = dots.getContext('2d'); c.fillStyle = 'rgba(255,255,255,1)'; for (let y = 18; y < 1080; y += 36) for (let x = 18; x < 1920; x += 36) { c.beginPath(); c.arc(x, y, 1.2, 0, Math.PI * 2); c.fill(); } }
+function tint(ctx, accent, cx, a = 1) {
+  if (!accent) return;
+  const g = ctx.createRadialGradient(cx, 540, 0, cx, 540, 1250);
+  g.addColorStop(0, hexA(accent, 0.24 * a)); g.addColorStop(0.55, hexA(accent, 0.08 * a)); g.addColorStop(1, hexA(accent, 0));
+  ctx.fillStyle = g; ctx.fillRect(0, 0, 1920, 1080);
+}
+function drawBG(prev, next, wipe, wx, wy) {
+  const c = bg.ctx; bg.begin();
+  c.fillStyle = '#0c0d11'; c.fillRect(0, 0, 1920, 1080);
+  if (prev) tint(c, prev.accent, prev.cx, prev.a ?? 1);
+  if (next && wipe > 0) {
+    const r = 2400 * wipe;
+    c.save(); c.beginPath(); c.arc(wx, wy, r, 0, Math.PI * 2); c.clip();
+    c.fillStyle = '#0c0d11'; c.fillRect(0, 0, 1920, 1080); tint(c, next.accent, next.cx, next.a ?? 1);
+    c.restore();
+    if (wipe < 1) { c.strokeStyle = hexA(next.accent, 0.35 * (1 - wipe)); c.lineWidth = 2; c.beginPath(); c.arc(wx, wy, r, 0, Math.PI * 2); c.stroke(); }
+  }
+  c.globalAlpha = 0.045; c.drawImage(dots, 0, 0); c.globalAlpha = 1;
+  const v = c.createRadialGradient(960, 540, 500, 960, 540, 1150); v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,.45)');
+  c.fillStyle = v; c.fillRect(0, 0, 1920, 1080);
+}
+
+// ---------- ball physics ----------
+function ballPos(tau, xa, xb, ya = 540) {
+  // tau relative to landing (0). drop from window centre -> floor bounce x2 -> arc into next centre
+  let y;
+  if (tau < TT.C1) y = ya;
+  else if (tau < TT.H1) { const s = tau - TT.C1; y = ya + 0.5 * G * s * s; }
+  else if (tau < TT.H2) { const s = tau - TT.H1, D = TT.H2 - TT.H1, v = G * D / 2; y = FLOOR - (v * s - 0.5 * G * s * s); }
+  else { const s = Math.min(tau, 0) - TT.H2, D = -TT.H2, v0 = (540 - FLOOR - 0.5 * G * D * D) / D; y = FLOOR + v0 * s + 0.5 * G * s * s; }
+  const x = tau < TT.C1 ? xa : lerp(xa, xb, E.inOutSine(inv(TT.C1, 0, tau)));
+  return { x, y };
+}
+function drawBallAt(c, skin, x, y, sx, sy, rot, alpha, t, scale = 1) {
+  c.save(); c.globalAlpha = alpha; c.translate(x, y); c.rotate(rot); c.scale(sx * scale, sy * scale); c.rotate(-rot);
+  drawBall(c, skin, BR, t); c.restore();
+}
+function floorShadow(c, x, y, a = 1) {
+  const hgt = FLOOR - y, k = clamp(1 - hgt / 700);
+  c.save(); c.globalAlpha = 0.45 * k * a; c.fillStyle = '#000';
+  c.beginPath(); c.ellipse(x, FLOOR + BR + 6, BR * (0.6 + 0.7 * k), 7 * (0.6 + 0.5 * k), 0, 0, Math.PI * 2); c.fill(); c.restore();
+}
+// transition from style a (block k) to b (block k+1, or outro). tau in [-1.35, 0.9]
+function drawTransition(c, a, b, xa, xb, yb, tau, T) {
+  fxUsed = true;
+  const vis = tau >= TT.C1 - 0.08 && tau <= 0.26;
+  const P = (tt) => ballPos(tt, xa, xb);
+  if (vis) {
+    const p = P(tau), p1 = P(tau - 1 / 240), p2 = P(tau + 1 / 240);
+    const vx = (p2.x - p1.x) * 120, vy = (p2.y - p1.y) * 120, sp = Math.hypot(vx, vy);
+    let sx = 1, sy = 1, rot = 0;
+    if (tau > TT.C1 && tau < -0.02) { const st = Math.min(0.24, sp / 15000); rot = Math.atan2(vy, vx); sx = 1 + st; sy = 1 - st * 0.55; }
+    [TT.H1, TT.H2].forEach((h) => { const q = Math.exp(-Math.pow((tau - h) / 0.035, 2)); if (q > 0.02) { rot = 0; sx = 1 + 0.32 * q; sy = 1 - 0.36 * q; } });
+    const land = Math.exp(-Math.pow(tau / 0.04, 2)) * (tau >= 0 ? 1 : 0.6);
+    if (land > 0.02) { rot = 0; sx = Math.max(sx, 1 + 0.25 * land); sy = Math.min(sy, 1 - 0.28 * land); }
+    const skin = tau < TT.H2 ? a.ball : b.ball;
+    const accent = tau < TT.H2 ? a.accent : b.accent;
+    const pop = tau >= TT.H2 ? 1 + 0.28 * Math.exp(-(tau - TT.H2) / 0.07) : 1;
+    const alpha = clamp(inv(TT.C1 - 0.08, TT.C1, tau)) * (1 - inv(0.05, 0.24, tau));
+    const grow = tau > 0 ? 1 + inv(0, 0.24, tau) * 0.6 : lerp(0.75, 1, inv(TT.C1 - 0.08, TT.C1, tau));
+    // trail
+    if (tau > TT.C1 + 0.04 && tau < 0) {
+      for (let i = 6; i >= 1; i--) { const q = P(tau - i * 0.022); c.globalAlpha = 0.16 * (1 - i / 7); c.fillStyle = accent; c.beginPath(); c.arc(q.x, q.y, BR * (1 - i * 0.07), 0, Math.PI * 2); c.fill(); }
+      c.globalAlpha = 1;
+    }
+    floorShadow(c, p.x, p.y, alpha);
+    drawBallAt(c, skin, p.x, p.y, sx, sy, rot, alpha, T, pop * grow);
+  }
+  // floor line (appears only while the ball is bouncing)
+  const fl = clamp(inv(TT.C1 - 0.15, TT.C1 + 0.1, tau)) * (1 - inv(-0.1, 0.3, tau));
+  if (fl > 0) {
+    const y = FLOOR + BR + 4, g2 = c.createLinearGradient(160, 0, 1760, 0);
+    g2.addColorStop(0, hexA(a.accent, 0)); g2.addColorStop(0.3, hexA(a.accent, 0.45 * fl)); g2.addColorStop(0.7, hexA(b.accent, 0.45 * fl)); g2.addColorStop(1, hexA(b.accent, 0));
+    c.fillStyle = g2; c.fillRect(160, y, 1600, 2);
+  }
+  // floor-contact dust & skin-change burst
+  [TT.H1, TT.H2].forEach((h, j) => {
+    const s = tau - h; if (s < 0 || s > 0.45) return;
+    const p = P(h); const col = j ? b.accent : a.accent;
+    c.strokeStyle = hexA(col, 0.6 * (1 - s / 0.45)); c.lineWidth = 2;
+    c.beginPath(); c.ellipse(p.x, FLOOR + BR + 4, 20 + s * 160, 4 + s * 18, 0, 0, Math.PI * 2); c.stroke();
+  });
+  const sB = tau - TT.H2;
+  if (sB >= 0 && sB < 0.7) {
+    const p = P(TT.H2); const pal = b.palette;
+    for (let i = 0; i < 12; i++) {
+      const ang = -Math.PI * (0.15 + 0.7 * (i / 11)), v = 520 + (i % 3) * 160;
+      const x = p.x + Math.cos(ang) * v * sB, y = FLOOR + Math.sin(ang) * v * sB + 0.5 * 2400 * sB * sB;
+      c.globalAlpha = 1 - sB / 0.7; c.fillStyle = pal[(i + 1) % pal.length];
+      c.beginPath(); c.arc(x, y, 6 - sB * 5, 0, Math.PI * 2); c.fill();
+    }
+    c.globalAlpha = 1;
+  }
+  // landing shockwave
+  if (tau >= 0 && tau < 0.55) {
+    const k = E.outCubic(inv(0, 0.55, tau));
+    c.strokeStyle = hexA(b.accent, 0.85 * (1 - k)); c.lineWidth = 3 * (1 - k) + 1;
+    c.beginPath(); c.arc(xb, yb, BR + 230 * k, 0, Math.PI * 2); c.stroke();
+  }
+}
+
+// ---------- window (drawn into the background canvas: much cheaper than a DOM layer with blur shadow) ----------
+const IMG = { cur: null, curSrc: '', want: '' };
+// intro hook: one key frame per style flashes behind the counter (the first second shows what the reel is)
+const HOOKF = { '01': 230, '02': 250, '03': 135, '04': 250, '05': 240, '06': 290, '07': 290, '08': 230, '09': 290, '10': 160, '11': 295, '12': 200, '13': 290, '14': 250, '15': 230, '16': 150, '17': 290, '18': 270, '19': 255, '20': 240 };
+const HOOK = META.map((m) => { const im = new Image(); im.src = `../frames/${m.id}/f${String(HOOKF[m.id] || 200).padStart(5, '0')}.jpg`; return im; });
+const hookReady = Promise.all(HOOK.map((im) => new Promise((r) => { if (im.complete && im.naturalWidth) r(); else { im.onload = r; im.onerror = r; } })));
+let fxUsed = false;   // fx canvas is hidden on frames where nothing is drawn on it (cheaper capture)
+function frameSrc(T) {
+  if (T < INTRO) return null;
+  const tb = T - INTRO, k = Math.floor(tb / BLOCK), t = tb - k * BLOCK;
+  if (k >= S.length || t >= BLOCK + TT.C1) return null;
+  const n = Math.max(0, Math.min(299, Math.round(t * FPS)));
+  return `../frames/${S[k].id}/f${String(n).padStart(5, '0')}.jpg`;
+}
+async function loadImg(src) {
+  if (IMG.curSrc === src) return;
+  const im = new Image(); im.src = src;
+  try { await im.decode(); } catch (e) { /* frame missing */ }
+  IMG.cur = im; IMG.curSrc = src;
+}
+const SHPAD = 260;
+const SHADOW = (() => {
+  const cv = document.createElement('canvas'); cv.width = WIN.w + SHPAD * 2; cv.height = WIN.h + SHPAD * 2;
+  const c = cv.getContext('2d');
+  c.shadowColor = 'rgba(0,0,0,.55)'; c.shadowBlur = 110; c.shadowOffsetX = 10000; c.shadowOffsetY = 40;
+  c.fillStyle = '#000'; c.beginPath(); c.roundRect(SHPAD - 10000, SHPAD, WIN.w, WIN.h, 26); c.fill();
+  return cv;
+})();
+function drawWin(c, k, r) {
+  const { x: cx, y: cy } = winC(k);
+  const full = r >= RMAX - 1;
+  const sc = full ? 1 : lerp(0.94, 1, clamp(r / RMAX));
+  const shA = clamp((r / RMAX - 0.72) / 0.28);
+  c.save(); c.translate(cx, cy); c.scale(sc, sc);
+  if (shA > 0) { c.globalAlpha = shA; c.drawImage(SHADOW, -WIN.w / 2 - SHPAD, -WIN.h / 2 - SHPAD); c.globalAlpha = 1; }
+  if (!full) { c.beginPath(); c.arc(0, 0, Math.max(0, r), 0, Math.PI * 2); c.clip(); }
+  c.save(); c.beginPath(); c.roundRect(-WIN.w / 2, -WIN.h / 2, WIN.w, WIN.h, 26); c.clip();
+  c.fillStyle = '#000'; c.fillRect(-WIN.w / 2, -WIN.h / 2, WIN.w, WIN.h);
+  if (IMG.cur && IMG.cur.naturalWidth) c.drawImage(IMG.cur, -WIN.w / 2, -WIN.h / 2, WIN.w, WIN.h);
+  c.restore();
+  c.lineWidth = 1.5; c.strokeStyle = 'rgba(255,255,255,.10)'; c.beginPath(); c.roundRect(-WIN.w / 2 + 0.75, -WIN.h / 2 + 0.75, WIN.w - 1.5, WIN.h - 1.5, 25.25); c.stroke();
+  c.lineWidth = 1; c.strokeStyle = 'rgba(255,255,255,.07)'; c.beginPath(); c.roundRect(-WIN.w / 2 - 0.5, -WIN.h / 2 - 0.5, WIN.w + 1, WIN.h + 1, 26.5); c.stroke();
+  c.restore();
+}
+
+// ---------- header ----------
+function updateHeader(T, curK, tb) {
+  const a = E.outCubic(inv(INTRO - 0.4, INTRO + 0.4, T)) * (1 - inv(INTRO + S.length * BLOCK + 4.6, INTRO + S.length * BLOCK + 5.4, T));
+  $('#hdr').style.opacity = a;
+  META.forEach((m, i) => {
+    const k = S.indexOf(m);
+    let f = 0;
+    if (k >= 0) f = k < curK ? 1 : k === curK ? clamp(tb / BLOCK) : 0;
+    if (curK >= S.length) f = k >= 0 ? 1 : 0;
+    segs[i].style.width = f * 100 + '%';
+  });
+}
+
+// ---------- intro ----------
+const iDots = META.map((m) => { const d = document.createElement('div'); d.className = 'abs'; d.style.cssText += `width:14px;height:14px;border-radius:50%;background:${m.accent};top:672px`; $('#intro').appendChild(d); return d; });
+let nw20 = 0;
+function renderIntro(T, c) {
+  $('#intro').style.display = 'block';
+  const idx = Math.min(NALL - 1, Math.floor(inv(0.3, 1.75, T) * NALL));
+  const acc = META[idx].accent;
+  // background light follows the counter colour
+  const bc = bg.ctx; bg.begin(); bc.fillStyle = '#0c0d11'; bc.fillRect(0, 0, 1920, 1080);
+  const gx = 960 + Math.sin(T * 1.3) * 200, g = bc.createRadialGradient(gx, 540, 0, gx, 540, 900);
+  g.addColorStop(0, hexA(T < 1.75 ? acc : S[0].accent, 0.2)); g.addColorStop(1, 'rgba(12,13,17,0)'); bc.fillStyle = g; bc.fillRect(0, 0, 1920, 1080);
+  bc.globalAlpha = 0.045 * inv(2.0, 3.0, T); bc.drawImage(dots, 0, 0); bc.globalAlpha = 1;
+  if (T < 1.95) {
+    const im = HOOK[idx], ph = T < 0.3 ? T / 0.3 : (inv(0.3, 1.75, T) * NALL) % 1;
+    if (im && im.naturalWidth) {
+      const sc = 1.07 - 0.05 * ph, w = 1920 * sc, h = 1080 * sc;
+      const fade = 1 - E.inQuad(inv(1.72, 1.95, T));
+      bc.globalAlpha = fade; bc.drawImage(im, (1920 - w) / 2, 540 - h / 2, w, h); bc.globalAlpha = 1;
+      bc.fillStyle = `rgba(8,9,12,${0.52 * fade})`; bc.fillRect(0, 0, 1920, 1080);
+      const vg = bc.createRadialGradient(960, 540, 200, 960, 540, 1100); vg.addColorStop(0, 'rgba(8,9,12,0)'); vg.addColorStop(1, `rgba(8,9,12,${0.7 * fade})`); bc.fillStyle = vg; bc.fillRect(0, 0, 1920, 1080);
+    }
+  }
+  const num = $('#iNum'), nm = $('#iName');
+  num.textContent = T < 0.3 ? '' : T >= 1.75 ? String(NALL) : pad(idx + 1);
+  if (T >= 1.75 && !nw20) nw20 = num.offsetWidth;
+  const nw = num.offsetWidth, NW = nw20 || nw;
+  const tw = Math.max($('#iTtl div').offsetWidth, $('#iSub div').offsetWidth);
+  const left0 = (1920 - (NW + 80 + tw)) / 2;
+  const lockK = E.inOutQuart(inv(1.85, 2.25, T));
+  const cx = lerp(960, left0 + NW / 2, lockK);
+  const punch = T >= 1.75 ? 1 + 0.12 * Math.exp(-(T - 1.75) * 9) : 1;
+  num.style.left = (cx - nw / 2) + 'px'; num.style.transform = `scale(${punch})`;
+  num.style.color = T >= 1.75 ? '#f4f2ee' : acc;
+  nm.textContent = T >= 0.3 && T < 1.85 ? META[idx].zh.join(' · ') : '';
+  nm.style.left = (960 - nm.offsetWidth / 2) + 'px';
+  ['#iTtl', '#iSub', '#iKick'].forEach((q) => { $(q).style.left = (left0 + NW + 84) + 'px'; });
+  $('#iTtl div').style.transform = `translateY(${(1 - E.outQuart(inv(2.0, 2.45, T))) * 150}px)`;
+  $('#iSub div').style.transform = `translateY(${(1 - E.outQuart(inv(2.3, 2.75, T))) * 64}px)`;
+  $('#iKick').style.opacity = inv(2.15, 2.5, T);
+  const ex = E.inQuart(inv(3.0, 3.4, T));
+  ['#iNum', '#iTtl', '#iSub', '#iKick'].forEach((q) => { $(q).style.opacity = (q === '#iKick' ? inv(2.15, 2.5, T) : 1) * (1 - ex); $(q).style.filter = `blur(${ex * 12}px)`; });
+  num.style.transform += ` translateY(${-ex * 120}px)`;
+  // dots row; dot 1 becomes the ball
+  const dx0 = left0 + NW + 84;
+  let ball = null;
+  iDots.forEach((d, i) => {
+    const k = spring(T - 2.55 - i * 0.025, { k: 300, c: 16 });
+    const shrink = i === 0 ? 0 : E.inBack(inv(3.3 + i * 0.012, 3.55 + i * 0.012, T));
+    const x = dx0 + i * 26;
+    d.style.left = x + 'px';
+    d.style.transform = `scale(${Math.max(0, k) * (1 - shrink)})`;
+    d.style.opacity = i === 0 && T > 3.35 ? 0 : 1;
+    if (i === 0) ball = { x: x + 7, y: 679 };
+  });
+  if (T > 3.35) {
+    fxUsed = true;
+    const tau = T - INTRO, D = 4.0 - 3.35, s = T - 3.35, g = 6000;
+    const xb = winC(0).x, v0 = (540 - ball.y - 0.5 * g * D * D) / D;
+    const x = lerp(ball.x, xb, E.inOutSine(s / D)), y = ball.y + v0 * s + 0.5 * g * s * s;
+    const grow = E.outBack(inv(3.35, 3.55, T), 2);
+    const R = lerp(7, BR, grow);
+    const skinOn = T > 3.62;
+    const pop = skinOn ? 1 + 0.3 * Math.exp(-(T - 3.62) / 0.07) : 1;
+    floorShadow(c, x, y, 0.6);
+    c.save(); c.translate(x, y); c.scale((R / BR) * pop, (R / BR) * pop);
+    if (skinOn) drawBall(c, S[0].ball, BR, T); else { c.fillStyle = S[0].accent; c.beginPath(); c.arc(0, 0, BR, 0, Math.PI * 2); c.fill(); }
+    c.restore();
+  }
+}
+
+// ---------- outro ----------
+const oChips = META.map((m, i) => { const d = document.createElement('div'); d.className = 'abs'; d.style.cssText += `width:44px;height:44px;border-radius:50%;background:${m.accent};display:flex;align-items:center;justify-content:center;font:800 17px 'Inter Display';color:#0c0d11;top:560px`; d.textContent = pad(i + 1); $('#outro').appendChild(d); return d; });
+stage.appendChild($('#oBlack'));
+function renderOutro(t) {
+  $('#outro').style.display = 'block';
+  const W0 = 960 - (NALL * 44 + (NALL - 1) * 18) / 2;
+  oChips.forEach((d, i) => {
+    const k = E.outBack(inv(0.1 + i * 0.012, 0.62 + i * 0.012, t), 1.3);
+    const tx = W0 + i * 62, ty = 560;
+    const x = lerp(960 - 22, tx, k), y = lerp(540 - 22, ty, k) - Math.sin(Math.PI * clamp(k)) * 90;
+    const hop = Math.max(0, Math.sin((t - 1.6 - i * 0.05) * 7)) * (t > 1.6 + i * 0.05 && t < 1.6 + i * 0.05 + 0.45 ? 14 : 0);
+    d.style.left = x + 'px'; d.style.top = (y - hop) + 'px';
+    d.style.transform = `scale(${t < 0.1 ? 0 : lerp(0.3, 1, clamp(k * 1.5))})`;
+  });
+  $('#oQ').style.transform = `translateY(${(1 - E.outQuart(inv(0.35, 0.85, t))) * 140}px)`;
+  $('#oSub').style.transform = `translateY(${(1 - E.outQuart(inv(1.0, 1.45, t))) * 70}px)`;
+  const sg = E.outCubic(inv(1.8, 2.6, t));
+  $('#oSign').style.opacity = sg; $('#oSign').style.letterSpacing = lerp(1.2, 0.6, sg) + 'em'; $('#oSign').style.paddingLeft = lerp(1.2, 0.6, sg) + 'em';
+  $('#oBlack').style.opacity = E.inOutCubic(inv(OUTRO - 0.8, OUTRO, t));
+}
+
+// ---------- main ----------
+Reel.scene({
+  duration: DUR, fps: FPS,
+  fonts: ['900 100px "Noto Sans CJK SC"', '400 24px "Noto Sans CJK SC"', '800 100px "Inter Display"', '600 17px Inter', '700 15px Inter'],
+  render(T) { renderAll(T); fx.cv.style.display = fxUsed ? 'block' : 'none'; },
+  async before(T) { if (T < INTRO) await hookReady; const w = frameSrc(T); if (w) await loadImg(w); },
+  async after() { await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))); },
+});
+function renderAll(T) {
+    const c = fx.ctx; fx.begin(); c.clearRect(0, 0, 1920, 1080);
+    fxUsed = false;
+    const want = frameSrc(T);
+    if (want && IMG.curSrc !== want && IMG.want !== want) { IMG.want = want; loadImg(want); }   // preview mode: async; render mode: already loaded by before()
+    $('#intro').style.display = 'none'; $('#outro').style.display = 'none';
+    PANELS.forEach((p) => { p.style.display = 'none'; });
+    const NB = S.length;
+    if (T < INTRO) {
+      renderIntro(T, c);
+      if (T > INTRO - PIN - 0.05) updatePanel(0, T - INTRO);
+      updateHeader(T, -1, 0);
+      return;
+    }
+    const tb = T - INTRO, k = Math.floor(tb / BLOCK), t = tb - k * BLOCK;
+    if (k >= NB) {
+      // outro: last ball lands at centre and bursts into 20 chips
+      const to = tb - NB * BLOCK;
+      const last = S[NB - 1];
+      drawBG({ accent: last.accent, cx: winC(NB - 1).x }, { accent: '#ff5fa8', cx: 960, a: 0.55 }, E.outCubic(inv(0, 1.0, to)), 960, 540);
+      const OUT = { ball: last.ball, accent: last.accent, palette: META.map((m) => m.accent) };
+      drawTransition(c, last, OUT, winC(NB - 1).x, 960, 540, to, T);
+      renderOutro(to);
+      updateHeader(T, NB, 0);
+      return;
+    }
+    const m = S[k], cx = winC(k).x;
+    // background (wipe from previous style on landing)
+    const prev = k > 0 ? { accent: S[k - 1].accent, cx: winC(k - 1).x } : { accent: S[0].accent, cx: 960, a: 0.6 };
+    drawBG(prev, { accent: m.accent, cx }, E.outCubic(inv(0, 1.0, t)), cx, 540);
+    // window: reveal from the ball, collapse into the next ball
+    let r = RMAX;
+    if (t < 0.5) r = lerp(BR, RMAX, E.outCubic(inv(0, 0.5, t)));
+    if (t > BLOCK + TT.C0) r = lerp(RMAX, BR, E.inCubic(inv(BLOCK + TT.C0, BLOCK + TT.C1, t)));
+    if (t < BLOCK + TT.C1) drawWin(bg.ctx, k, r);
+    updatePanel(k, t);
+    if (k + 1 < NB && t > BLOCK - PIN - 0.05) updatePanel(k + 1, t - BLOCK);
+    // incoming transition tail
+    if (t < 0.9) {
+      const a = k > 0 ? S[k - 1] : { ball: S[0].ball, accent: S[0].accent, palette: S[0].palette };
+      const xa = k > 0 ? winC(k - 1).x : cx;
+      if (k > 0) drawTransition(c, a, m, xa, cx, 540, t, T);
+      else if (t < 0.55) { fxUsed = true; const kk = E.outCubic(inv(0, 0.55, t)); c.strokeStyle = hexA(m.accent, 0.85 * (1 - kk)); c.lineWidth = 3; c.beginPath(); c.arc(cx, 540, BR + 230 * kk, 0, Math.PI * 2); c.stroke();
+        const al = 1 - inv(0.05, 0.24, t); if (al > 0) drawBallAt(c, m.ball, cx, 540, 1 + 0.25 * Math.exp(-Math.pow(t / 0.04, 2)), 1 - 0.28 * Math.exp(-Math.pow(t / 0.04, 2)), 0, al, T, 1 + inv(0, 0.24, t) * 0.6); }
+    }
+    // outgoing transition
+    const tau = t - BLOCK;
+    if (tau > TT.C0 - 0.1) {
+      const b = k + 1 < NB ? S[k + 1] : { ball: m.ball, accent: m.accent, palette: META.map((q) => q.accent) };
+      const xb = k + 1 < NB ? winC(k + 1).x : 960;
+      drawTransition(c, m, b, cx, xb, 540, tau, T);
+    }
+    updateHeader(T, k, t);
+}
+</script></body></html>

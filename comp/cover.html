@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>cover</title>
+<style>
+  html,body{margin:0;width:1920px;height:1080px;overflow:hidden;background:#0c0d11}
+  #m{position:absolute;inset:0;display:grid;grid-template-columns:repeat(5,1fr);grid-template-rows:repeat(4,1fr);gap:6px;background:#0c0d11}
+  #m div{background-size:cover;background-position:center;position:relative}
+  #m div::after{content:attr(data-n);position:absolute;left:12px;top:10px;font:700 18px 'Inter Display';color:rgba(255,255,255,.75);letter-spacing:.04em;text-shadow:0 1px 4px rgba(0,0,0,.6)}
+  #shade{position:absolute;inset:0;background:radial-gradient(ellipse 62% 58% at 50% 52%, rgba(8,9,12,.9) 0%, rgba(8,9,12,.78) 45%, rgba(8,9,12,.25) 100%)}
+  #t{position:absolute;left:0;right:0;top:300px;text-align:center;color:#fff;font-family:'Noto Sans CJK SC'}
+  #t .n{font:900 260px/0.9 'Inter Display';letter-spacing:-.02em}
+  #t .a{font-weight:900;font-size:112px;letter-spacing:.04em;margin-top:6px}
+  #t .b{font-weight:700;font-size:44px;letter-spacing:.12em;color:rgba(255,255,255,.86);margin-top:22px}
+  #t .c{font:600 22px Inter;letter-spacing:.42em;color:rgba(255,255,255,.55);margin-top:30px}
+</style></head><body>
+<div id="m"></div><div id="shade"></div>
+<div id="t"><div class="n">20</div><div class="a">种视频风格</div><div class="b">每一帧，都是代码算出来的</div><div class="c">肖雄 · XIAOXIONG</div></div>
+<script>
+const P = { '01': 230, '02': 250, '03': 135, '04': 250, '05': 240, '06': 290, '07': 290, '08': 230, '09': 290, '10': 160, '11': 295, '12': 200, '13': 290, '14': 250, '15': 230, '16': 150, '17': 290, '18': 270, '19': 255, '20': 240 };
+const m = document.getElementById('m');
+Object.keys(P).sort().forEach((id) => { const d = document.createElement('div'); d.dataset.n = id; d.style.backgroundImage = `url(../frames/${id}/f${String(P[id]).padStart(5, '0')}.jpg)`; m.appendChild(d); });
+</script></body></html>
