@@ -68,7 +68,7 @@ node make.js brand 张三 ZHANGSAN   # 把画面里的署名换成你自己的
 
 信息卡上的风格名称、介绍、标签和配色在 `comp/meta.js`。
 
-**最省事的办法是让 AI 帮你改**：用 Codex、Claude Code、Cursor 等 AI 编程助手打开这个文件夹，直接说"把 09 拼贴风格的标题改成『今天也要好好学习』"或"照着 11 包豪斯的做法新做一个风格"。文件夹里的 `AGENTS.md` 和 `skills/code-video/SKILL.md` 就是写给 AI 看的说明书，它会照着做。
+**最省事的办法是让 AI 帮你改**：用 Codex、Claude Code、Cursor 等 AI 编程助手打开这个文件夹，直接说"把 09 拼贴风格的标题改成『今天也要好好学习』"或"照着 11 包豪斯的做法新做一个风格"。文件夹里的 `AGENTS.md` 和 `skills/sy-styles-20/SKILL.md` 就是写给 AI 看的说明书，它会照着做。
 
 ## 五、文件夹里都是什么
 
