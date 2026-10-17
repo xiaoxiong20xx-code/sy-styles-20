@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>16 真实页面 2.5D 推镜 · Product Page</title>
+<script src="../../lib/core.js"></script>
+<style>
+  #stage{font-family:'Noto Sans CJK SC',Inter,sans-serif;background:radial-gradient(120% 90% at 50% 40%,#eef1f6 0%,#cfd6e2 100%)}
+  #cam{position:absolute;left:0;top:0;width:1920px;height:1080px;perspective:1900px;perspective-origin:50% 50%}
+  #world{position:absolute;left:160px;top:60px;width:1600px;height:960px;transform-style:preserve-3d}
+  .ly{position:absolute;transform-style:preserve-3d;will-change:transform,filter}
+  #page{left:0;top:0;width:1600px;height:960px;background:#fff;border-radius:22px;box-shadow:0 40px 120px rgba(30,40,70,.25)}
+  #nav{left:0;top:0;width:1600px;height:84px;border-bottom:1px solid #edf0f4;display:flex;align-items:center;padding:0 48px;box-sizing:border-box;gap:44px;font-size:20px;color:#3a4150;background:#fff;border-radius:22px 22px 0 0}
+  #nav b{font:800 26px Inter;letter-spacing:.08em;color:#111;margin-right:30px}
+  #cart{position:absolute;right:48px;top:22px;width:40px;height:40px}
+  #badge{position:absolute;right:-10px;top:-8px;min-width:24px;height:24px;border-radius:12px;background:#ff3b30;color:#fff;font:700 15px Inter;display:flex;align-items:center;justify-content:center;transform:scale(0)}
+  #gal{left:48px;top:120px;width:760px;height:780px;border-radius:20px;background:linear-gradient(160deg,#f4f6fa,#e6ebf3);overflow:hidden}
+  #gal canvas{position:absolute;left:0;top:0}
+  .thumbs{position:absolute;left:28px;bottom:28px;display:flex;gap:14px}
+  .thumbs i{width:84px;height:84px;border-radius:14px;background:#fff;display:block;box-shadow:0 4px 14px rgba(0,0,0,.06)}
+  #info{left:860px;top:120px;width:690px;height:780px}
+  .tag{display:inline-block;font:700 15px Inter;letter-spacing:.2em;color:#2f6bff;background:#e8efff;padding:8px 14px;border-radius:8px}
+  h1{margin:22px 0 8px;font-weight:900;font-size:54px;color:#111;letter-spacing:.02em}
+  .sub{font-size:22px;color:#6b7383}
+  .stars{margin-top:18px;font-size:22px;color:#ffb400;letter-spacing:4px}.stars span{color:#6b7383;font-size:18px;letter-spacing:0;margin-left:10px}
+  .price{margin-top:22px;font:800 64px 'Inter Display';color:#ff3b30;letter-spacing:-.02em}.price small{font-size:30px}.price s{font:500 24px Inter;color:#9aa1ae;margin-left:16px}
+  .lbl{margin-top:30px;font-size:20px;color:#3a4150;font-weight:700}
+  .sw{display:flex;gap:16px;margin-top:14px}.sw i{width:56px;height:56px;border-radius:50%;display:block;box-shadow:inset 0 0 0 3px #fff,0 0 0 2px #dfe3ea}
+  .sz{display:grid;grid-template-columns:repeat(6,1fr);gap:12px;margin-top:14px}
+  .sz i{height:56px;border-radius:12px;border:2px solid #e3e7ee;display:flex;align-items:center;justify-content:center;font:600 20px Inter;color:#2a2f3a;font-style:normal}
+  #btns{left:860px;top:780px;width:690px;height:90px;display:flex;gap:18px}
+  #btns div{flex:1;border-radius:18px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:28px}
+  #addc{background:#fff2e6;color:#ff7a00;border:2px solid #ffd8b0}#buy{background:linear-gradient(90deg,#ff7a1a,#ff3b30);color:#fff;box-shadow:0 18px 40px rgba(255,80,40,.35)}
+  #cursor{position:absolute;left:0;top:0;width:60px;height:60px;z-index:9}
+  #toast{left:500px;top:250px;width:600px;height:420px;border-radius:28px;background:rgba(255,255,255,.96);box-shadow:0 50px 120px rgba(20,30,60,.35);display:flex;flex-direction:column;align-items:center;justify-content:center;opacity:0}
+  #toast .ok{width:120px;height:120px;border-radius:50%;background:#22c55e;display:flex;align-items:center;justify-content:center}
+  #toast h2{margin:28px 0 8px;font-weight:900;font-size:50px;color:#111}#toast p{margin:0;font-size:22px;color:#6b7383}
+  #cap{position:absolute;left:0;right:0;top:40px;text-align:center;font:600 18px Inter;letter-spacing:.5em;color:rgba(30,40,60,.55)}
+</style>
+</head><body><div id="stage">
+<div id="cap">PAGE CAMERA · 2.5D</div>
+<div id="cam"><div id="world">
+  <div class="ly" id="page"></div>
+  <div class="ly" id="nav"><b>XIAOXIONG</b><span>新品</span><span>跑步</span><span>训练</span><span>城市</span>
+    <svg id="cart" viewBox="0 0 40 40"><path d="M5 8h5l4 18h18l4-13H12" fill="none" stroke="#111" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><circle cx="16" cy="32" r="2.6" fill="#111"/><circle cx="30" cy="32" r="2.6" fill="#111"/></svg><div id="badge" style="position:absolute;right:38px;top:16px">1</div></div>
+  <div class="ly" id="gal"><canvas id="shoe" width="760" height="780"></canvas><div class="thumbs"><i></i><i></i><i></i><i></i></div></div>
+  <div class="ly" id="info">
+    <span class="tag">NEW · 2026</span>
+    <h1>云跑 Air 3</h1><div class="sub">轻到忘记它的存在 · 回弹缓震中底</div>
+    <div class="stars">★★★★★<span>4.9 · 1.2万条评价</span></div>
+    <div class="price"><small>¥</small>599<s>¥899</s></div>
+    <div class="lbl">颜色</div><div class="sw"><i style="background:#2f6bff"></i><i style="background:#ff5a3c"></i><i style="background:#1f2937"></i><i style="background:#e9e4da"></i></div>
+    <div class="lbl">尺码</div><div class="sz"><i>39</i><i>40</i><i>41</i><i>42</i><i>43</i><i>44</i></div>
+  </div>
+  <div class="ly" id="btns"><div id="addc">加入购物车</div><div id="buy">立即购买</div></div>
+  <div class="ly" id="toast"><div class="ok"><svg width="64" height="64" viewBox="0 0 64 64"><path id="tick" d="M16 33l11 11 22-24" fill="none" stroke="#fff" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/></svg></div><h2>下单成功</h2><p>预计明天送达 · 订单号 20261015</p></div>
+  <canvas class="ly" id="fly" width="1600" height="960" style="left:0;top:0;pointer-events:none"></canvas>
+  <svg class="ly" id="cursor" viewBox="0 0 44 44"><path d="M8 4l26 16-11 3 7 13-5 3-7-13-8 8z" fill="#111" stroke="#fff" stroke-width="2.5" stroke-linejoin="round"/></svg>
+</div></div></div>
+<script>
+/* ===== 16 真实页面 2.5D 推镜 · 电商详情页 =====
+   A real product page built in HTML, split into floating layers in CSS 3D with depth-of-field between them.
+   A cursor picks a colour (the shoe recolours), picks a size, presses Buy now (the hook): the shoe flies into
+   the cart, the badge pops, and the order-success sheet rises while the camera dollies in. */
+const { E, clamp, inv, lerp, spring, hash } = Reel;
+const stage = Reel.makeStage('#dfe5ee');
+const $ = (s) => document.querySelector(s);
+const L = { page: $('#page'), nav: $('#nav'), gal: $('#gal'), info: $('#info'), btns: $('#btns'), toast: $('#toast'), fly: $('#fly'), cursor: $('#cursor') };
+const world = $('#world');
+const sw = [...document.querySelectorAll('.sw i')], sz = [...document.querySelectorAll('.sz i')];
+const shoeCv = $('#shoe'), sg = shoeCv.getContext('2d'), fly = L.fly.getContext('2d');
+const COLORS = [['#2f6bff', '#1a3fae'], ['#ff5a3c', '#c2341c']];
+function drawShoe(g, cx, cy, s, col, rot = 0) {
+  g.save(); g.translate(cx, cy); g.rotate(rot); g.scale(s, s);
+  // shadow
+  g.fillStyle = 'rgba(20,30,60,.18)'; g.beginPath(); g.ellipse(10, 150, 300, 26, 0, 0, 6.3); g.fill();
+  // sole
+  const so = g.createLinearGradient(0, 90, 0, 150); so.addColorStop(0, '#ffffff'); so.addColorStop(1, '#d9dee8'); g.fillStyle = so;
+  g.beginPath(); g.moveTo(-300, 100); g.quadraticCurveTo(-310, 150, -250, 148); g.lineTo(250, 148); g.quadraticCurveTo(330, 145, 320, 90); g.lineTo(300, 70); g.lineTo(-280, 80); g.closePath(); g.fill();
+  g.strokeStyle = 'rgba(0,0,0,.08)'; g.lineWidth = 3; g.beginPath(); g.moveTo(-290, 118); g.lineTo(310, 112); g.stroke();
+  // upper
+  const up = g.createLinearGradient(0, -120, 0, 100); up.addColorStop(0, col[0]); up.addColorStop(1, col[1]); g.fillStyle = up;
+  g.beginPath(); g.moveTo(-280, 82); g.quadraticCurveTo(-300, -10, -250, -70); g.quadraticCurveTo(-200, -120, -120, -100); g.lineTo(-40, -60); g.quadraticCurveTo(80, -40, 200, 0); g.quadraticCurveTo(300, 30, 305, 75); g.closePath(); g.fill();
+  // collar + tongue
+  g.fillStyle = '#111827'; g.beginPath(); g.moveTo(-250, -70); g.quadraticCurveTo(-200, -110, -125, -98); g.lineTo(-140, -70); g.quadraticCurveTo(-200, -80, -232, -48); g.closePath(); g.fill();
+  // knit texture
+  g.save(); g.clip(); g.restore();
+  g.strokeStyle = 'rgba(255,255,255,.14)'; g.lineWidth = 2; for (let i = -280; i < 300; i += 12) { g.beginPath(); g.moveTo(i, -110); g.lineTo(i + 60, 90); g.stroke(); }
+  // stripe + laces
+  g.strokeStyle = 'rgba(255,255,255,.95)'; g.lineWidth = 16; g.lineCap = 'round'; g.beginPath(); g.moveTo(-180, 40); g.quadraticCurveTo(0, -20, 160, 50); g.stroke();
+  g.strokeStyle = '#fff'; g.lineWidth = 7; for (let k = 0; k < 5; k++) { g.beginPath(); g.moveTo(-90 + k * 40, -70 + k * 9); g.lineTo(-60 + k * 40, -50 + k * 9); g.stroke(); }
+  // highlight
+  g.fillStyle = 'rgba(255,255,255,.18)'; g.beginPath(); g.ellipse(-60, -40, 160, 26, -0.2, 0, 6.3); g.fill();
+  g.restore();
+}
+function curPos(t) { // cursor path in world px
+  const K = [[0, 1500, 900], [1.2, 1500, 900], [1.9, 1003, 560], [3.0, 1003, 560], [3.6, 1129, 693], [4.0, 1129, 693], [4.45, 1395, 825], [5.4, 1395, 825], [6.0, 1500, 1020]];
+  let i = 0; while (i < K.length - 2 && t > K[i + 1][0]) i++; const [t0, x0, y0] = K[i], [t1, x1, y1] = K[i + 1]; const u = E.inOutCubic(clamp((t - t0) / (t1 - t0)));
+  return [lerp(x0, x1, u) + Math.sin(u * Math.PI) * 30, lerp(y0, y1, u) - Math.sin(u * Math.PI) * 40];
+}
+const clicks = [2.05, 3.75, 4.55];
+Reel.scene({
+  duration: 10, fps: 30,
+  fonts: ['900 130px "Noto Sans CJK SC"', '800 30px Inter', '900 54px "Noto Sans CJK SC"', '800 64px "Inter Display"', '700 15px Inter', '400 20px "Noto Sans CJK SC"'],
+  cues: [{ t: 0.1, sfx: 'whoosh', gain: 0.5 }, { t: 0.5, sfx: 'expand', gain: 0.5 }, { t: 2.05, sfx: 'click', gain: 0.9 }, { t: 2.1, sfx: 'pop', gain: 0.5 }, { t: 3.75, sfx: 'click', gain: 0.9 },
+    { t: 4.55, sfx: 'click', gain: 1.0 }, { t: 4.6, sfx: 'whoosh_up', gain: 0.7 }, { t: 5.25, sfx: 'coin', gain: 0.9 }, { t: 5.3, sfx: 'pop', gain: 0.7 }, { t: 5.9, sfx: 'swell', gain: 0.5 }, { t: 6.3, sfx: 'ding', gain: 1.0 }, { t: 6.5, sfx: 'sparkle', gain: 0.6 }],
+  render(t) {
+    if (!window.__ttl) { const d = document.createElement('div'); d.style.cssText = "position:absolute;left:110px;top:90px;z-index:50;font:900 130px 'Noto Sans CJK SC';color:#111;letter-spacing:.02em;line-height:1;opacity:0;text-shadow:0 20px 40px rgba(0,0,0,.18)"; d.innerHTML = "云跑 Air 3<div style=\"font:800 30px Inter;letter-spacing:.5em;color:#ff3b30;margin-top:22px\">RUN ON CLOUDS · 一键下单</div>"; stage.appendChild(d); window.__ttl = d; }
+    { const a = spring(t - 6.5, { k: 220, c: 18 }); window.__ttl.style.opacity = t > 6.5 ? Math.min(1, a * 1.4) : 0; window.__ttl.style.transform = `translateY(${(1 - Math.min(1, a)) * 80}px)`; }
+    // camera: start tilted & exploded -> settle -> dolly in on the toast
+    const ex = E.inOutCubic(inv(0.0, 1.0, t)) * (1 - E.inOutCubic(inv(6.0, 7.0, t)) * 0.5);
+    const rx = lerp(26, 12, E.inOutSine(clamp(t / 5))) - 6 * E.inOutCubic(inv(6, 8, t)), ry = lerp(-30, -14, E.inOutSine(clamp(t / 5))) + 10 * E.inOutCubic(inv(6, 8, t));
+    const dz = lerp(-260, -80, E.inOutSine(clamp(t / 5))) + 260 * E.inOutCubic(inv(5.8, 8.2, t));
+    world.style.transform = `translateY(${60 - 40 * E.inOutCubic(inv(5.8, 8.2, t))}px) translateZ(${dz}px) rotateX(${rx}deg) rotateY(${ry}deg)`;
+    const Z = { page: 0, nav: 70 * ex, gal: 110 * ex, info: 170 * ex, btns: 240 * ex, toast: 340, fly: 150 * ex + 20, cursor: 300 * ex + 40 };
+    // depth of field: focus moves with the action
+    const focus = t < 4.4 ? Z.info : t < 5.8 ? Z.btns : Z.toast;
+    for (const k in L) { const el = L[k]; const z = Z[k]; const b = (k === 'cursor' || k === 'fly') ? 0 : Math.min(6, Math.abs(z - focus) / 45) * (k === 'toast' && t < 5.6 ? 0 : 1); el.style.transform = `translateZ(${z}px)`; el.style.filter = b > 0.3 ? `blur(${b.toFixed(2)}px)` : 'none'; }
+    // colour pick (2.05) and size pick (3.75)
+    const ci = t > 2.05 ? 1 : 0;
+    sw.forEach((e, i) => e.style.boxShadow = i === ci ? 'inset 0 0 0 4px #fff,0 0 0 3px #111' : 'inset 0 0 0 3px #fff,0 0 0 2px #dfe3ea');
+    sz.forEach((e, i) => { const on = i === 3 && t > 3.75; e.style.borderColor = on ? '#111' : '#e3e7ee'; e.style.background = on ? '#111' : '#fff'; e.style.color = on ? '#fff' : '#2a2f3a'; });
+    // shoe in gallery (bobs, recolours with a wipe)
+    sg.setTransform(1, 0, 0, 1, 0, 0); sg.clearRect(0, 0, 760, 780);
+    const flying = t > 4.6;
+    const bob = Math.sin(t * 2) * 8;
+    if (!flying) {
+      const col = COLORS[0];
+      drawShoe(sg, 390, 360 + bob, 1.0, col, -0.08);
+      if (t > 2.05) { const w = E.inOutCubic(inv(2.05, 2.5, t)); sg.save(); sg.beginPath(); sg.arc(380, 360, 900 * w, 0, 6.3); sg.clip(); sg.fillStyle = '#eef1f7'; sg.fillRect(0, 0, 760, 780); drawShoe(sg, 390, 360 + bob, 1.0, COLORS[1], -0.08); sg.restore(); }
+    }
+    // flight to the cart (world coords) + confetti
+    fly.setTransform(1, 0, 0, 1, 0, 0); fly.clearRect(0, 0, 1600, 960);
+    if (flying && t < 5.3) { const u = E.inOutCubic(clamp((t - 4.6) / 0.65)); const x = lerp(48 + 380, 1530, u), y = lerp(120 + 360, 42, u) - Math.sin(u * Math.PI) * 120; drawShoe(fly, x, y, lerp(0.9, 0.06, u), COLORS[1], u * 3); }
+    if (t > 5.25 && t < 7) for (let i = 0; i < 36; i++) { const u = t - 5.25; const a = hash(i) * 6.28; fly.fillStyle = ['#ff3b30', '#ffb400', '#2f6bff', '#22c55e'][i % 4]; fly.globalAlpha = 1 - u / 1.75; fly.fillRect(1530 + Math.cos(a) * u * 300, 42 + Math.sin(a) * u * 220 + u * u * 300, 10, 6); } fly.globalAlpha = 1;
+    // badge
+    const bp = spring(t - 5.25, { k: 400, c: 12 }); $('#badge').style.transform = `scale(${t > 5.25 ? bp : 0})`;
+    // buy button press
+    const pr = Math.exp(-Math.pow((t - 4.55) / 0.08, 2)); $('#buy').style.transform = `scale(${1 - 0.06 * pr})`;
+    // toast
+    const ta = spring(t - 5.9, { k: 200, c: 16 }); L.toast.style.opacity = t > 5.9 ? Math.min(1, ta * 1.5) : 0;
+    L.toast.style.transform += ` translateY(${(1 - Math.min(1, ta)) * 120}px) scale(${0.85 + 0.15 * Math.min(1.05, ta)})`;
+    const tick = $('#tick'); const len = 52; tick.style.strokeDasharray = `${len} ${len}`; tick.style.strokeDashoffset = `${len * (1 - E.outCubic(inv(6.3, 6.7, t)))}`;
+    // cursor
+    const [cx, cy] = curPos(t); const click = Math.max(...clicks.map((c) => Math.exp(-Math.pow((t - c) / 0.07, 2))));
+    L.cursor.style.left = cx + 'px'; L.cursor.style.top = cy + 'px'; L.cursor.style.transform += ` scale(${1 - 0.18 * click})`; L.cursor.style.opacity = t > 6.2 ? 1 - inv(6.2, 6.6, t) : 1;
+  },
+});
+</script></body></html>

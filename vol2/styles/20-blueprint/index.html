@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>20 蓝图工程图 · Blueprint Bicycle</title>
+<script src="../../lib/core.js"></script>
+</head><body><div id="stage"></div>
+<script>
+/* ===== 20 蓝图工程图 · 骑出图纸 =====
+   A drafted bicycle on a creased blueprint sheet: construction lines first, then tubes, wheels with 32 spokes,
+   a toothed chainring and chain, dimension lines, angle arcs and a title block. Then the drawing comes alive
+   (the hook): wheels spin, cranks turn, and the bike rides off the sheet, leaving its dimensions behind. */
+const { E, clamp, inv, lerp, rng, hash } = Reel;
+const stage = Reel.makeStage('#0b3a7e');
+const C = Reel.cfg({ title: '从图纸，到路上', en: 'FROM PAPER TO ROAD', block: ['XIAOXIONG CYCLE WORKS', 'CITY BIKE  ·  MODEL 20', 'SHEET 20/20   SCALE 1:5', 'DRAWN  肖雄  ·  2026.10'] });
+const cv = Reel.canvas2d(stage); const g = cv.ctx;
+let PAPER;
+const W = '#f2f7ff', CY = 'rgba(160,210,255,.55)';
+const RW = { x: 560, y: 680 }, FW = { x: 1310, y: 680 }, BB = { x: 890, y: 720 }, ST = { x: 815, y: 410 }, HT = { x: 1185, y: 425 }, HB = { x: 1205, y: 505 }, WR = 205;
+function makePaper() { const c = document.createElement('canvas'), k = Reel.RS; c.width = 1920 * k | 0; c.height = 1080 * k | 0; const x = c.getContext('2d', { willReadFrequently: true }); x.scale(k, k);
+  const gr = x.createRadialGradient(960, 480, 100, 960, 540, 1200); gr.addColorStop(0, '#1752a8'); gr.addColorStop(1, '#0a2f6c'); x.fillStyle = gr; x.fillRect(0, 0, 1920, 1080);
+  const r = rng(20); for (let i = 0; i < 20000; i++) { x.fillStyle = `rgba(${r() < 0.5 ? '255,255,255' : '0,10,40'},${0.02 + r() * 0.04})`; x.fillRect(r() * 1920, r() * 1080, 1.3, 1.3); }
+  x.strokeStyle = 'rgba(180,215,255,.08)'; x.lineWidth = 1; for (let i = 0; i < 1920; i += 40) { x.beginPath(); x.moveTo(i, 0); x.lineTo(i, 1080); x.stroke(); } for (let j = 0; j < 1080; j += 40) { x.beginPath(); x.moveTo(0, j); x.lineTo(1920, j); x.stroke(); }
+  // fold creases
+  for (const fx of [640, 1280]) { const cg = x.createLinearGradient(fx - 20, 0, fx + 20, 0); cg.addColorStop(0, 'rgba(0,0,0,0)'); cg.addColorStop(0.48, 'rgba(0,10,40,.18)'); cg.addColorStop(0.52, 'rgba(255,255,255,.08)'); cg.addColorStop(1, 'rgba(0,0,0,0)'); x.fillStyle = cg; x.fillRect(fx - 20, 0, 40, 1080); }
+  { const cg = x.createLinearGradient(0, 520, 0, 560); cg.addColorStop(0, 'rgba(0,0,0,0)'); cg.addColorStop(0.48, 'rgba(0,10,40,.16)'); cg.addColorStop(0.52, 'rgba(255,255,255,.07)'); cg.addColorStop(1, 'rgba(0,0,0,0)'); x.fillStyle = cg; x.fillRect(0, 520, 1920, 40); }
+  x.strokeStyle = 'rgba(230,240,255,.7)'; x.lineWidth = 3; x.strokeRect(50, 50, 1820, 980); x.lineWidth = 1; x.strokeRect(60, 60, 1800, 960);
+  return c; }
+const P = (pr) => clamp(pr);
+function line(a, b, p, col = W, w = 2.6, dash = null) { if (p <= 0) return; g.strokeStyle = col; g.lineWidth = w; g.setLineDash(dash || []); g.beginPath(); g.moveTo(a.x, a.y); g.lineTo(lerp(a.x, b.x, p), lerp(a.y, b.y, p)); g.stroke(); g.setLineDash([]); }
+function circ(c, r, p, col = W, w = 2.6, dash = null, a0 = -Math.PI / 2) { if (p <= 0) return; g.strokeStyle = col; g.lineWidth = w; g.setLineDash(dash || []); g.beginPath(); g.arc(c.x, c.y, r, a0, a0 + 6.2832 * p); g.stroke(); g.setLineDash([]); }
+function tube(a, b, w, p) { if (p <= 0) return; const dx = b.x - a.x, dy = b.y - a.y, L = Math.hypot(dx, dy), nx = -dy / L * w / 2, ny = dx / L * w / 2; const e = { x: lerp(a.x, b.x, p), y: lerp(a.y, b.y, p) };
+  line({ x: a.x + nx, y: a.y + ny }, { x: b.x + nx, y: b.y + ny }, p); line({ x: a.x - nx, y: a.y - ny }, { x: b.x - nx, y: b.y - ny }, p); }
+function arrowDim(a, b, off, label, p) { if (p <= 0) return; const dx = b.x - a.x, dy = b.y - a.y, L = Math.hypot(dx, dy), nx = -dy / L, ny = dx / L;
+  const A = { x: a.x + nx * off, y: a.y + ny * off }, B = { x: b.x + nx * off, y: b.y + ny * off };
+  line(a, A, p, CY, 1.2); line(b, B, p, CY, 1.2); line(A, B, p, W, 1.4);
+  if (p > 0.95) { for (const [P0, s] of [[A, 1], [B, -1]]) { const ux = dx / L * s, uy = dy / L * s; g.fillStyle = W; g.beginPath(); g.moveTo(P0.x, P0.y); g.lineTo(P0.x + ux * 16 + nx * 5, P0.y + uy * 16 + ny * 5); g.lineTo(P0.x + ux * 16 - nx * 5, P0.y + uy * 16 - ny * 5); g.fill(); }
+    g.save(); g.translate((A.x + B.x) / 2 + nx * 18, (A.y + B.y) / 2 + ny * 18); let an = Math.atan2(dy, dx); if (an > Math.PI / 2 || an < -Math.PI / 2) an += Math.PI; g.rotate(an); g.fillStyle = W; g.font = '600 20px "JetBrains Mono","DejaVu Sans Mono",monospace'; g.textAlign = 'center'; g.fillText(label, 0, 6); g.restore(); } }
+function wheel(c, p, rot, hp) { circ(c, WR, p); circ(c, WR - 14, p, W, 1.4); circ(c, WR + 10, p, W, 3.4); circ(c, 18, p);
+  for (let i = 0; i < 32; i++) { const sp = clamp(hp * 32 - i); if (sp <= 0) break; const a = rot + i / 32 * 6.2832, a2 = a + (i % 2 ? 0.5 : -0.5); line({ x: c.x + Math.cos(a2) * 16, y: c.y + Math.sin(a2) * 16 }, { x: c.x + Math.cos(a) * (WR - 14), y: c.y + Math.sin(a) * (WR - 14) }, sp, 'rgba(242,247,255,.75)', 1.1); }
+  // tread marks
+  if (p >= 1) for (let i = 0; i < 60; i++) { const a = rot + i / 60 * 6.2832; line({ x: c.x + Math.cos(a) * (WR + 5), y: c.y + Math.sin(a) * (WR + 5) }, { x: c.x + Math.cos(a) * (WR + 15), y: c.y + Math.sin(a) * (WR + 15) }, 1, 'rgba(242,247,255,.6)', 1.2); } }
+function chainring(c, r, n, rot, p) { if (p <= 0) return; g.strokeStyle = W; g.lineWidth = 2; g.beginPath(); for (let i = 0; i <= n * 4 * p; i++) { const a = rot + i / (n * 4) * 6.2832; const rr = r + (i % 4 < 2 ? 7 : 0); const X = c.x + Math.cos(a) * rr, Y = c.y + Math.sin(a) * rr; i ? g.lineTo(X, Y) : g.moveTo(X, Y); } g.stroke(); circ(c, r - 18, p, W, 1.4); for (let k = 0; k < 5; k++) { const a = rot + k / 5 * 6.2832; line(c, { x: c.x + Math.cos(a) * (r - 18), y: c.y + Math.sin(a) * (r - 18) }, p, W, 1.6); } }
+function bike(t, ox, rot, crank) {
+  const tt = (a, d) => P((t - a) / d);
+  const o = (pt) => ({ x: pt.x + ox, y: pt.y });
+  const rw = o(RW), fw = o(FW), bb = o(BB), st = o(ST), ht = o(HT), hb = o(HB);
+  // construction lines (dashed) — stay behind with the sheet, see below
+  wheel(rw, tt(0.6, 0.6), rot, tt(1.2, 0.8)); wheel(fw, tt(0.8, 0.6), rot, tt(1.4, 0.8));
+  tube(bb, st, 14, tt(1.6, 0.4)); tube(st, ht, 12, tt(1.9, 0.4)); tube(bb, hb, 16, tt(2.1, 0.4)); tube(ht, hb, 18, tt(2.3, 0.3));
+  tube(bb, rw, 9, tt(2.4, 0.35)); tube({ x: st.x + 6, y: st.y + 30 }, rw, 8, tt(2.55, 0.35));
+  tube(hb, fw, 10, tt(2.7, 0.35));
+  // saddle, bars
+  const sad = { x: st.x - 18, y: st.y - 50 }; line(st, sad, tt(2.9, 0.2)); if (tt(3.0, 0.3) > 0) { g.strokeStyle = W; g.lineWidth = 2.6; g.beginPath(); g.moveTo(sad.x - 60, sad.y); g.quadraticCurveTo(sad.x, sad.y - 22 * tt(3.0, 0.3), sad.x + 50, sad.y - 4); g.lineTo(sad.x - 60, sad.y + 8); g.closePath(); g.stroke(); }
+  const bar = { x: ht.x - 20, y: ht.y - 60 }; line(ht, bar, tt(3.0, 0.2)); if (tt(3.1, 0.3) > 0) { g.beginPath(); g.moveTo(bar.x, bar.y); g.quadraticCurveTo(bar.x - 70, bar.y - 10, bar.x - 90 * tt(3.1, 0.3), bar.y + 30 * tt(3.1, 0.3)); g.stroke(); }
+  // drivetrain
+  chainring(bb, 62, 38, crank, tt(3.2, 0.5)); circ(rw, 34, tt(3.4, 0.3), W, 2);
+  if (tt(3.6, 0.4) > 0) { const p = tt(3.6, 0.4); g.setLineDash([7, 5]); g.lineDashOffset = -crank * 60; line({ x: bb.x, y: bb.y - 68 }, { x: rw.x, y: rw.y - 38 }, p, W, 2); line({ x: bb.x, y: bb.y + 68 }, { x: rw.x, y: rw.y + 38 }, p, W, 2); g.setLineDash([]); g.lineDashOffset = 0; }
+  const pa = tt(3.8, 0.3); if (pa > 0) { for (const s of [0, Math.PI]) { const a = crank + s; const pe = { x: bb.x + Math.cos(a) * 95, y: bb.y + Math.sin(a) * 95 }; line(bb, pe, pa, W, 4); if (pa >= 1) { g.strokeStyle = W; g.lineWidth = 2; g.strokeRect(pe.x - 26, pe.y - 8, 52, 16); } } }
+}
+function construction(t) {
+  const tt = (a, d) => P((t - a) / d);
+  line({ x: 120, y: RW.y }, { x: 1800, y: RW.y }, tt(0.1, 0.6), CY, 1.2, [18, 6, 4, 6]);
+  line({ x: RW.x, y: 330 }, { x: RW.x, y: 960 }, tt(0.2, 0.5), CY, 1.2, [18, 6, 4, 6]); line({ x: FW.x, y: 330 }, { x: FW.x, y: 960 }, tt(0.3, 0.5), CY, 1.2, [18, 6, 4, 6]);
+  line({ x: BB.x, y: 300 }, { x: BB.x, y: 960 }, tt(0.4, 0.5), CY, 1.2, [18, 6, 4, 6]);
+  circ(BB, 140, tt(0.5, 0.6), CY, 1, [6, 6]);
+  arrowDim({ x: RW.x, y: 940 }, { x: FW.x, y: 940 }, 0, 'WHEELBASE 1060', tt(4.2, 0.5));
+  arrowDim(BB, ST, -70, 'ST 540', tt(4.5, 0.5));
+  arrowDim(ST, HT, -60, 'TT 560', tt(4.8, 0.5));
+  arrowDim({ x: FW.x + WR + 10, y: FW.y - WR - 10 }, { x: FW.x + WR + 10, y: FW.y + WR + 10 }, 50, 'Ø 700C', tt(5.0, 0.5));
+  // seat angle arc
+  const ap = tt(5.2, 0.4); if (ap > 0) { g.strokeStyle = W; g.lineWidth = 1.5; const a1 = Math.atan2(ST.y - BB.y, ST.x - BB.x); g.beginPath(); g.arc(BB.x, BB.y, 110, -Math.PI, lerp(-Math.PI, a1, ap)); g.stroke(); if (ap >= 1) { g.fillStyle = W; g.font = '600 20px "JetBrains Mono","DejaVu Sans Mono",monospace'; g.fillText('73°', BB.x - 160, BB.y - 60); } }
+  // callouts
+  const co = tt(5.4, 0.4); if (co > 0) { g.globalAlpha = co; g.fillStyle = W; g.font = '600 18px "JetBrains Mono","DejaVu Sans Mono",monospace'; line({ x: BB.x + 40, y: BB.y + 40 }, { x: BB.x + 140, y: BB.y + 170 }, 1, W, 1.2); g.fillText('38T CHAINRING', BB.x + 150, BB.y + 176); g.globalAlpha = 1; }
+}
+function titleBlock(t) { const p = E.outCubic(inv(5.5, 6.0, t)); if (p <= 0) return; g.save(); g.globalAlpha = p; const x = 1540, y = 890; g.strokeStyle = W; g.lineWidth = 2; g.strokeRect(x, y, 300, 116); for (let i = 1; i < 4; i++) { g.lineWidth = 1; g.beginPath(); g.moveTo(x, y + i * 29); g.lineTo(x + 300, y + i * 29); g.stroke(); }
+  g.fillStyle = W; g.font = '700 14px "JetBrains Mono","DejaVu Sans Mono",monospace'; C.block.forEach((s, i) => g.fillText(s, x + 12, y + 20 + i * 29)); g.restore(); }
+Reel.scene({
+  duration: 10, fps: 30,
+  fonts: ['600 20px "JetBrains Mono"', '900 76px "Noto Sans CJK SC"', '700 18px Inter'],
+  async setup() { PAPER = makePaper(); },
+  cues: [{ t: 0.1, sfx: 'pen', gain: 0.6 }, { t: 0.6, sfx: 'pencil', gain: 0.6 }, { t: 1.6, sfx: 'pen', gain: 0.5 }, { t: 2.4, sfx: 'pen', gain: 0.5 }, { t: 3.2, sfx: 'tick', gain: 0.5 }, { t: 3.6, sfx: 'ticks', gain: 0.4 },
+    { t: 4.2, sfx: 'scribble', gain: 0.5 }, { t: 5.0, sfx: 'scribble', gain: 0.4 }, { t: 5.5, sfx: 'stamp', gain: 0.6 }, { t: 6.2, sfx: 'click', gain: 0.8 }, { t: 6.4, sfx: 'roll', gain: 0.8 }, { t: 7.0, sfx: 'whoosh', gain: 0.8 }, { t: 7.8, sfx: 'chime', gain: 0.6 }],
+  render(t) {
+    const OPEN_T0 = 1.3; if (t < 2) t = OPEN_T0 + (2 - OPEN_T0) * t / 2; // no blank opening: frame 0 starts mid-intro
+
+    cv.begin();
+    // camera: slow push on the drafting, then hold the whole sheet
+    const z = lerp(1.12, 1.0, E.inOutSine(inv(0, 6, t))); g.translate(960, 540); g.scale(z, z); g.translate(-960, -540);
+    g.drawImage(PAPER, 0, 0, 1920, 1080);
+    construction(t);
+    // the drawing comes alive at 6.2 s and rides off to the right
+    const ride = t > 6.2 ? (t - 6.2) : 0;
+    const dist = ride > 0 ? 40 * ride * ride * ride + 120 * ride * ride : 0;
+    const rot = -dist / WR + (t > 6.2 ? 0 : 0), crank = -dist / 160;
+    const wob = ride > 0 ? Math.sin(t * 9) * 2 : 0;
+    g.save(); g.translate(0, wob);
+    // speed lines behind the bike
+    if (ride > 0.3) for (let i = 0; i < 12; i++) { const y = 420 + i * 40, l = Math.min(600, dist * 0.6) * (0.5 + hash(i) * 0.5); g.strokeStyle = 'rgba(242,247,255,.45)'; g.lineWidth = 2; g.beginPath(); g.moveTo(RW.x + dist - 300 - l, y); g.lineTo(RW.x + dist - 300, y); g.stroke(); }
+    bike(t, dist, rot, crank);
+    g.restore();
+    titleBlock(t);
+    const ta = E.outCubic(inv(6.5, 7.0, t));
+    if (ta > 0) { g.save(); g.globalAlpha = ta; g.fillStyle = W; g.font = '900 110px "Noto Sans CJK SC"'; g.textAlign = 'left'; g.fillText(C.title, 140, 210 + (1 - ta) * 20); g.font = '700 18px Inter'; g.letterSpacing = '10px'; g.globalAlpha = ta * 0.75; g.fillText(C.en, 144, 236); g.restore();
+      // ghost outline left where the bike stood
+      g.save(); g.globalAlpha = 0.25 * ta; g.setLineDash([10, 8]); circ(RW, WR, 1, W, 1.5, [10, 8]); circ(FW, WR, 1, W, 1.5, [10, 8]); g.restore(); }
+  },
+});
+</script></body></html>

@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>07 贴纸风科普 · Coffee Journey</title>
+<script src="../../lib/core.js"></script>
+</head><body><div id="stage"></div>
+<script>
+/* ===== 07 贴纸风科普 · 一杯咖啡的旅程 =====
+   Kraft paper on a desk. Die-cut vinyl stickers are slapped down one per beat: tree → cherry → roast → grind → brew → latte.
+   Each one lands from above with a loose shadow that tightens on contact, a gloss sweep across its laminate,
+   and a hand-drawn marker arrow to the next. The camera reads along, then pulls back to the whole journey. */
+const { E, clamp, inv, lerp, rng, hash, spring } = Reel;
+const stage = Reel.makeStage('#c89b6a');
+const C = Reel.cfg({ title: '一杯咖啡的旅程', sub: 'FROM SEED TO CUP', steps: ['种下', '采果', '烘焙', '研磨', '萃取', '拿铁'], end: '☕ 完成！', sign: 'XIAOXIONG' });
+const cv = Reel.canvas2d(stage); const g = cv.ctx;
+const EMO = ['🌱', '🍒', '🔥', '⚙️', '💧', '☕'];
+const TAGC = ['#3aa76d', '#e0464e', '#f08a24', '#6b7280', '#2f80ed', '#8b5a2b'];
+const ST = [ // world positions of stickers (zig-zag)
+  { x: 360, y: 560, r: -0.12, s: 1 }, { x: 860, y: 380, r: 0.1, s: 0.95 }, { x: 1380, y: 600, r: -0.06, s: 1 },
+  { x: 1880, y: 400, r: 0.12, s: 0.95 }, { x: 2380, y: 600, r: -0.1, s: 1 }, { x: 2960, y: 470, r: 0.05, s: 1.35 },
+];
+const T0 = [0.55, 1.5, 2.45, 3.4, 4.35, 5.6]; // slap times (on the beat-ish)
+let PAPER, STK = [];
+function makePaper() {
+  const c = document.createElement('canvas'), k = Reel.RS; c.width = 4200 * k | 0; c.height = 2200 * k | 0;
+  const x = c.getContext('2d', { willReadFrequently: true }); x.scale(k, k);
+  const gr = x.createLinearGradient(0, 0, 3600, 1400); gr.addColorStop(0, '#c99e6c'); gr.addColorStop(1, '#bf905d'); x.fillStyle = gr; x.fillRect(0, 0, 4200, 2200);
+  const r = rng(5);
+  for (let i = 0; i < 40000; i++) { x.fillStyle = `rgba(${r() < 0.5 ? '90,60,30' : '240,210,170'},${0.04 + r() * 0.07})`; x.fillRect(r() * 3600, r() * 1400, 1 + r() * 2, 1 + r() * 2); }
+  for (let i = 0; i < 2500; i++) { x.strokeStyle = `rgba(110,75,40,${0.06 + r() * 0.08})`; x.lineWidth = 0.6 + r(); const px = r() * 3600, py = r() * 1400, a = r() * 6.3, l = 8 + r() * 30; x.beginPath(); x.moveTo(px, py); x.lineTo(px + Math.cos(a) * l, py + Math.sin(a) * l); x.stroke(); }
+  // faint fold line and a coffee ring stain
+  x.strokeStyle = 'rgba(90,60,30,.12)'; x.lineWidth = 3; x.beginPath(); x.moveTo(1640, 0); x.lineTo(1660, 1400); x.stroke();
+  x.strokeStyle = 'rgba(110,60,25,.16)'; x.lineWidth = 10; x.beginPath(); x.arc(2620, 1080, 120, 0.3, 5.9); x.stroke();
+  return c;
+}
+function makeSticker(emo, label, col, num) {
+  // emoji + label laid out, then dilated into a white die-cut border
+  const S = 520, k = Reel.RS * 1.0;
+  const art = document.createElement('canvas'); art.width = S * k | 0; art.height = S * k | 0; const a = art.getContext('2d', { willReadFrequently: true }); a.scale(k, k);
+  a.font = '230px "Noto Color Emoji"'; a.textAlign = 'center'; a.textBaseline = 'middle'; a.fillText(emo, S / 2, S / 2 - 40);
+  a.font = '900 54px "Noto Sans CJK SC"'; const w = a.measureText(label).width + 64;
+  a.fillStyle = col; a.beginPath(); a.roundRect(S / 2 - w / 2, S / 2 + 110, w, 84, 42); a.fill();
+  a.fillStyle = '#fff'; a.fillText(label, S / 2, S / 2 + 154);
+  a.fillStyle = '#1f2430'; a.beginPath(); a.arc(S / 2 - 150, S / 2 - 150, 40, 0, 6.3); a.fill(); a.fillStyle = '#fff'; a.font = '800 46px Inter'; a.fillText(String(num), S / 2 - 150, S / 2 - 147);
+  const out = document.createElement('canvas'); out.width = art.width; out.height = art.height; const o = out.getContext('2d', { willReadFrequently: true });
+  // white border by stamping the silhouette around a circle
+  const sil = document.createElement('canvas'); sil.width = art.width; sil.height = art.height; const s = sil.getContext('2d');
+  s.drawImage(art, 0, 0); s.globalCompositeOperation = 'source-in'; s.fillStyle = '#fff'; s.fillRect(0, 0, sil.width, sil.height);
+  const R = 18 * k; for (let i = 0; i < 24; i++) { const an = i / 24 * 6.283; o.drawImage(sil, Math.cos(an) * R, Math.sin(an) * R); }
+  o.drawImage(sil, 0, 0);
+  o.drawImage(art, 0, 0);
+  // vinyl laminate: subtle top-light gradient across the whole sticker
+  o.globalCompositeOperation = 'source-atop'; const lg = o.createLinearGradient(0, 0, 0, out.height); lg.addColorStop(0, 'rgba(255,255,255,.12)'); lg.addColorStop(1, 'rgba(0,0,0,.06)'); o.fillStyle = lg; o.fillRect(0, 0, out.width, out.height);
+  // mask for gloss & shadow
+  const msk = document.createElement('canvas'); msk.width = out.width; msk.height = out.height; const m = msk.getContext('2d'); m.drawImage(out, 0, 0); m.globalCompositeOperation = 'source-in'; m.fillStyle = '#000'; m.fillRect(0, 0, msk.width, msk.height);
+  return { img: out, mask: msk, S, k };
+}
+const tmp = document.createElement('canvas'); let tctx;
+function drawSticker(st, i, t) {
+  const T = T0[i]; if (t < T - 0.35) return;
+  const u = clamp((t - (T - 0.35)) / 0.35); // falling in
+  const land = t - T;
+  const lift = u < 1 ? (1 - E.inQuad(u)) : 0; // height above paper
+  const press = land > 0 ? 1 - 0.06 * Math.exp(-land * 14) * Math.cos(land * 40) : 1;
+  const sc = st.s * (1 + lift * 0.35) * press;
+  const rot = st.r + lift * 0.35 * (i % 2 ? 1 : -1);
+  const S = STK[i];
+  // shadow: big & soft while in the air, tight once stuck
+  g.save(); g.translate(st.x + 10 + lift * 60, st.y + 16 + lift * 80); g.rotate(rot); g.scale(sc, sc);
+  g.globalAlpha = (0.35 - lift * 0.15) * Math.min(1, u * 2); g.filter = `blur(${(4 + lift * 30) * Reel.RS}px)`;
+  g.drawImage(S.mask, -S.S / 2, -S.S / 2, S.S, S.S); g.restore();
+  g.save(); g.translate(st.x, st.y - lift * 40); g.rotate(rot); g.scale(sc, sc); g.globalAlpha = Math.min(1, u * 3);
+  g.drawImage(S.img, -S.S / 2, -S.S / 2, S.S, S.S);
+  // gloss sweep after landing
+  const gs = inv(0.05, 0.6, land);
+  if (gs > 0 && gs < 1) {
+    const w = S.img.width, h = S.img.height;
+    tctx.setTransform(1, 0, 0, 1, 0, 0); tctx.clearRect(0, 0, w, h); tctx.globalCompositeOperation = 'source-over';
+    tctx.drawImage(S.mask, 0, 0); tctx.globalCompositeOperation = 'source-in';
+    const gx = lerp(-0.6, 1.6, gs) * w; const gr = tctx.createLinearGradient(gx - 160, 0, gx + 160, h * 0.4); gr.addColorStop(0, 'rgba(255,255,255,0)'); gr.addColorStop(0.5, 'rgba(255,255,255,.75)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+    tctx.fillStyle = gr; tctx.fillRect(0, 0, w, h);
+    g.drawImage(tmp, 0, 0, w, h, -S.S / 2, -S.S / 2, S.S, S.S);
+  }
+  g.restore();
+}
+function arrow(a, b, p, seed) { // marker arrow drawn on, slightly wobbly
+  if (p <= 0) return;
+  const mx = (a[0] + b[0]) / 2, my = (a[1] + b[1]) / 2 - 120 * (seed % 2 ? -1 : 1);
+  const pt = (u) => [(1 - u) * (1 - u) * a[0] + 2 * (1 - u) * u * mx + u * u * b[0], (1 - u) * (1 - u) * a[1] + 2 * (1 - u) * u * my + u * u * b[1]];
+  g.save(); g.strokeStyle = '#2a2018'; g.lineWidth = 7; g.lineCap = 'round'; g.lineJoin = 'round'; g.globalAlpha = 0.85;
+  g.setLineDash([22, 16]); g.beginPath(); for (let k = 0; k <= 40 * p; k++) { const [x, y] = pt(k / 40); const j = Math.sin(k * 1.7 + seed) * 1.5; k ? g.lineTo(x + j, y + j) : g.moveTo(x, y); } g.stroke(); g.setLineDash([]);
+  if (p > 0.95) { const [x1, y1] = pt(1), [x0, y0] = pt(0.94); const an = Math.atan2(y1 - y0, x1 - x0); g.beginPath(); g.moveTo(x1 - Math.cos(an - 0.5) * 34, y1 - Math.sin(an - 0.5) * 34); g.lineTo(x1, y1); g.lineTo(x1 - Math.cos(an + 0.5) * 34, y1 - Math.sin(an + 0.5) * 34); g.stroke(); }
+  g.restore();
+}
+
+Reel.scene({
+  duration: 10, fps: 30,
+  fonts: ['900 54px "Noto Sans CJK SC"', '800 46px Inter', '230px "Noto Color Emoji"', '900 92px "Noto Sans CJK SC"', '700 22px Inter'],
+  async setup() { PAPER = makePaper(); STK = EMO.map((e, i) => makeSticker(e, C.steps[i], TAGC[i], i + 1)); tmp.width = STK[0].img.width; tmp.height = STK[0].img.height; tctx = tmp.getContext('2d'); },
+  cues: [...T0.map((x, i) => ({ t: x, sfx: 'sticker', gain: i === 5 ? 1 : 0.8 })), ...T0.slice(0, 5).map((x) => ({ t: x + 0.32, sfx: 'marker', gain: 0.45 })),
+    { t: 5.62, sfx: 'impact_soft', gain: 0.6 }, { t: 6.3, sfx: 'zoom', gain: 0.5 }, { t: 7.2, sfx: 'pop', gain: 0.7 }, { t: 7.4, sfx: 'sparkle', gain: 0.6 }],
+  render(t) {
+    const OPEN_T0 = 0.9; if (t < 2) t = OPEN_T0 + (2 - OPEN_T0) * t / 2; // no blank opening: frame 0 starts mid-intro
+
+    cv.begin();
+    // camera follows the newest sticker, then pulls back to show the whole route
+    const follow = (tt) => { let x = ST[0].x; for (let i = 0; i < 6; i++) { const u = E.inOutCubic(inv(T0[i] - 0.55, T0[i] + 0.1, tt)); x = lerp(x, ST[i].x, u); } return x; };
+    const pull = E.inOutCubic(inv(6.1, 7.4, t));
+    const z = lerp(1.25, 0.57, pull) * (1 + 0.025 * E.inOutSine(inv(7.4, 10, t)));
+    const fx = lerp(follow(t), 1675, pull), fy = lerp(500, 430, pull);
+    g.save(); g.translate(960, 560); g.scale(z, z); g.rotate(lerp(-0.02, 0.0, pull)); g.translate(-fx, -fy);
+    g.drawImage(PAPER, -500, -650, 4200, 2200);
+    // washi tape title strip on the paper (world space, left)
+    for (let i = 0; i < 5; i++) arrow([ST[i].x + 170, ST[i].y], [ST[i + 1].x - 190, ST[i + 1].y], E.inOutSine(inv(T0[i] + 0.25, T0[i + 1] - 0.25, t)), i);
+    ST.forEach((st, i) => drawSticker(st, i, t));
+    g.restore();
+    // title card (screen space) — a strip of tape with type
+    const ta = E.outBack(inv(0.1, 0.6, t)), to = 1 - E.inCubic(inv(5.2, 5.6, t)), tb = E.outBack(inv(6.4, 6.9, t));
+    const showTitle = (a, y) => { g.save(); g.translate(960, y); g.rotate(-0.02); g.scale(a, a);
+      g.fillStyle = 'rgba(255,240,170,.92)'; g.beginPath(); g.moveTo(-430, -66); for (let k = 0; k <= 10; k++) g.lineTo(-430 + k * 86, -66 + (k % 2) * 6); g.lineTo(430, 66); for (let k = 10; k >= 0; k--) g.lineTo(-430 + k * 86, 66 - (k % 2) * 6); g.closePath(); g.fill();
+      g.fillStyle = '#2a2018'; g.font = '900 92px "Noto Sans CJK SC"'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(C.title, 0, 6); g.restore();
+      g.save(); g.globalAlpha = a; g.font = '700 22px Inter'; g.fillStyle = 'rgba(42,32,24,.75)'; g.textAlign = 'center'; g.letterSpacing = '10px'; g.fillText(C.sub, 960, y + 104); g.restore(); };
+    if (ta > 0 && to > 0) showTitle(ta * to, 150);
+    if (tb > 0) showTitle(tb * 1.3, 150);
+    g.save(); g.font = '700 22px Inter'; g.fillStyle = 'rgba(42,32,24,.55)'; g.textAlign = 'right'; g.fillText(C.sign, 1860, 1040); g.restore();
+    // vignette + soft window light
+    const vg = g.createRadialGradient(760, 340, 200, 960, 540, 1250); vg.addColorStop(0, 'rgba(255,240,215,.12)'); vg.addColorStop(1, 'rgba(50,25,5,.38)'); g.fillStyle = vg; g.fillRect(0, 0, 1920, 1080);
+  },
+});
+</script></body></html>

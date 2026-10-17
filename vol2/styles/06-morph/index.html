@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>06 形变动画 · Shape Shift</title>
+<script src="../../lib/core.js"></script>
+</head><body><div id="stage"></div>
+<script>
+/* ===== 06 形变动画 · 一个形状的旅行 =====
+   One solid shape travels through five forms on the beat: sun → raindrop → leaf → heart → speech bubble.
+   Every morph is a 720-point radial blend with a travelling ripple (each angle lands on its own spring),
+   squash-and-stretch, and a circular colour wipe that flips the whole frame. */
+const { E, clamp, inv, lerp, spring, hash } = Reel;
+const stage = Reel.makeStage('#232464');
+const C = Reel.cfg({ labels: ['太阳 SUN', '雨滴 RAIN', '叶子 LEAF', '心动 LOVE', '你好 HELLO'], bubble: '你好', title: '万物皆可形变', en: 'EVERYTHING MORPHS', sign: 'XIAOXIONG · SHAPE SHIFT' });
+const cv = Reel.canvas2d(stage); const g = cv.ctx;
+const NA = 720, CXc = 960, CYc = 520;
+function radial(fn) { // closed parametric curve -> radius per angle (ray cast against the polyline)
+  const pts = []; for (let i = 0; i < 1600; i++) pts.push(fn(i / 1600 * Math.PI * 2));
+  const R = new Float32Array(NA);
+  for (let a = 0; a < NA; a++) {
+    const th = a / NA * Math.PI * 2, dx = Math.cos(th), dy = Math.sin(th); let best = 0;
+    for (let i = 0; i < pts.length; i++) { const [x1, y1] = pts[i], [x2, y2] = pts[(i + 1) % pts.length];
+      const ex = x2 - x1, ey = y2 - y1, den = dx * ey - dy * ex; if (Math.abs(den) < 1e-9) continue;
+      const s = (x1 * ey - y1 * ex) / den, u = (x1 * dy - y1 * dx) / den; if (s > 0 && u >= 0 && u <= 1) best = Math.max(best, s); }
+    R[a] = best;
+  }
+  const M = new Float32Array(NA); for (let a = 0; a < NA; a++) { const v = [R[(a + NA - 2) % NA], R[(a + NA - 1) % NA], R[a], R[(a + 1) % NA], R[(a + 2) % NA]].sort((p, q) => p - q); M[a] = v[2]; }
+  return M;
+}
+const SH = [
+  { name: 'sun', bg: '#232464', fg: '#ffc53d', ac: '#ff8f3d', R: radial((u) => { const r = 190 + 46 * Math.pow(Math.max(0, Math.cos(12 * u)), 6); return [Math.cos(u) * r, Math.sin(u) * r]; }) },
+  { name: 'drop', bg: '#ffd84d', fg: '#2f6bff', ac: '#8fb4ff', R: radial((u) => { const x = Math.sin(u) * 190 * Math.pow(Math.sin(u / 2), 1.1), y = -Math.cos(u) * 250 + 40; return [x, y]; }) },
+  { name: 'leaf', bg: '#fff0d4', fg: '#1f9a7c', ac: '#83d6b8', R: radial((u) => { const x = Math.cos(u) * 270, y = Math.sin(u) * 135 * Math.pow(Math.abs(Math.sin(u)), 0.2) * (1 - 0.15 * Math.cos(u)); const r = -0.6; return [x * Math.cos(r) - y * Math.sin(r), x * Math.sin(r) + y * Math.cos(r)]; }) },
+  { name: 'heart', bg: '#1d1630', fg: '#ff4d6d', ac: '#ff9db0', R: radial((u) => { const x = 16 * Math.pow(Math.sin(u), 3), y = 13 * Math.cos(u) - 5 * Math.cos(2 * u) - 2 * Math.cos(3 * u) - Math.cos(4 * u); return [x * 14.5, -y * 14.5 - 20]; }) },
+  { name: 'bubble', bg: '#ff4d6d', fg: '#fff7ef', ac: '#1d1630', R: radial((u) => { // rounded rect with a tail
+      const w = 300, h = 190, rr = 90; const c = Math.cos(u), s = Math.sin(u);
+      const p = Math.pow(Math.pow(Math.abs(c) / w, 5) + Math.pow(Math.abs(s) / h, 5), -1 / 5); let x = c * p, y = s * p;
+      const tail = Math.exp(-Math.pow((u - 2.2) / 0.12, 2)); x -= tail * 60; y += tail * 120; return [x, y]; }) },
+];
+const TT = [1.5, 3.25, 5.0, 6.75]; // morph starts (on the beat)
+function stateAt(t) { let k = 0; while (k < TT.length && t >= TT[k]) k++; return k; }
+
+function shapePath(R0, R1, prog, rot, sx, sy, cx, cy) {
+  g.beginPath();
+  for (let a = 0; a <= NA; a++) {
+    const i = a % NA, th = i / NA * Math.PI * 2;
+    const p = prog(th);
+    const r = lerp(R0[i], R1[i], p);
+    const x = Math.cos(th + rot) * r * sx, y = Math.sin(th + rot) * r * sy;
+    a ? g.lineTo(cx + x, cy + y) : g.moveTo(cx + x, cy + y);
+  }
+  g.closePath();
+}
+
+Reel.scene({
+  duration: 10, fps: 30,
+  fonts: ['900 120px "Noto Sans CJK SC"', '800 30px "Noto Sans CJK SC"', '700 18px Inter'],
+  cues: [{ t: 0.1, sfx: 'pop', gain: 0.8 }, ...TT.map((x) => ({ t: x, sfx: 'morph', gain: 0.8 })), ...TT.map((x) => ({ t: x + 0.32, sfx: 'boing', gain: 0.4 })),
+    { t: 7.6, sfx: 'pop', gain: 0.7 }, { t: 8.2, sfx: 'chime', gain: 0.6 }],
+  render(t) {
+    const OPEN_T0 = 1.2; if (t < 2) t = OPEN_T0 + (2 - OPEN_T0) * t / 2;
+    cv.begin();
+    const k = stateAt(t), cur = SH[k], prev = SH[Math.max(0, k - 1)];
+    const ts = k > 0 ? TT[k - 1] : -10;
+    // background with circular wipe from the shape
+    const w = E.inOutCubic(inv(ts, ts + 0.55, t));
+    g.fillStyle = (k > 0 && w < 1) ? prev.bg : cur.bg; g.fillRect(0, 0, 1920, 1080);
+    if (k > 0 && w < 1) { g.fillStyle = cur.bg; g.beginPath(); g.arc(CXc, CYc, 1250 * w, 0, 6.3); g.fill(); }
+    // background ornaments: concentric rings that breathe on the beat
+    const beat = (t * 2) % 1;
+    g.strokeStyle = 'rgba(255,255,255,.08)'; if (k === 2) g.strokeStyle = 'rgba(0,0,0,.06)';
+    for (let i = 0; i < 6; i++) { g.lineWidth = 2; g.beginPath(); g.arc(CXc, CYc, 330 + i * 110 + E.outCubic(beat) * 20, 0, 6.3); g.stroke(); }
+    // intro scale
+    const intro = spring(t - 0.05, { k: 220, c: 15 });
+    const morphP = k > 0 ? (th) => clamp(spring(t - ts - 0.08 * (1 + Math.sin(th * 2 + k)), { k: 210, c: 16 })) * 1.0 : () => 1;
+    const R0 = k > 0 ? prev.R : SH[0].R, R1 = cur.R;
+    // squash & stretch + twist during the morph
+    const mt = k > 0 ? t - ts : 9;
+    const sq = 1 + 0.16 * Math.exp(-mt * 6) * Math.sin(mt * 18);
+    const rot = (k > 0 ? (1 - E.outCubic(clamp(mt / 0.7))) * 0.9 : 0) + Math.sin(t * 1.3) * 0.04 + (k === 0 ? t * 0.25 : 0);
+    const bob = Math.sin(t * Math.PI) * 8;
+    const sc = intro * (1 - 0.06 * Math.exp(-Math.pow((beat - 0.02) / 0.08, 2)));
+    const cy = CYc + bob;
+    // soft shadow
+    g.save(); g.fillStyle = 'rgba(0,0,0,.25)'; g.filter = `blur(${22 * Reel.RS}px)`; shapePath(R0, R1, morphP, rot, sc / sq, sc * sq, CXc + 18, cy + 34); g.fill(); g.restore();
+    // body with a subtle colour mix between states
+    const fg = (k > 0 && mt < 0.4) ? prev.fg : cur.fg;
+    shapePath(R0, R1, morphP, rot, sc / sq, sc * sq, CXc, cy); g.fillStyle = fg; g.fill();
+    if (k > 0 && mt < 0.4) { g.save(); g.clip(); g.fillStyle = cur.fg; g.beginPath(); g.arc(CXc + 200, cy - 200, 700 * E.inOutCubic(mt / 0.4), 0, 6.3); g.fill(); g.restore(); shapePath(R0, R1, morphP, rot, sc / sq, sc * sq, CXc, cy); }
+    // inner light: offset shape inside (gives a flat "shine" layer)
+    g.save(); g.clip(); g.fillStyle = 'rgba(255,255,255,.18)'; shapePath(R0, R1, morphP, rot, sc / sq * 0.86, sc * sq * 0.86, CXc - 26, cy - 30); g.fill();
+    // per-shape details that pop in after each morph
+    const det = E.outBack(inv(0.35, 0.75, mt));
+    g.fillStyle = cur.ac; g.strokeStyle = cur.ac; g.lineCap = 'round';
+    if (k === 0) { g.globalAlpha = 0.9; g.beginPath(); g.arc(CXc, cy, 120 * intro, 0, 6.3); g.fill(); }
+    if (k === 1) { g.lineWidth = 22; g.beginPath(); g.arc(CXc - 40, cy + 90, 70 * det, 3.4, 4.6); g.stroke(); }
+    if (k === 2) { g.lineWidth = 10; g.beginPath(); g.moveTo(CXc - 230 * det, cy + 130 * det); g.lineTo(CXc + 230 * det, cy - 130 * det); g.stroke();
+      for (let i = -2; i <= 2; i++) { const bx = CXc + i * 70 * det, by = cy - i * 40 * det; g.lineWidth = 6; g.beginPath(); g.moveTo(bx, by); g.lineTo(bx - 50 * det, by - 70 * det); g.moveTo(bx, by); g.lineTo(bx + 70 * det, by + 40 * det); g.stroke(); } }
+    if (k === 3) { g.globalAlpha = 0.85; g.beginPath(); g.ellipse(CXc - 110, cy - 90, 50 * det, 28 * det, -0.7, 0, 6.3); g.fill(); }
+    if (k === 4) { g.globalAlpha = 1; g.fillStyle = cur.ac; g.font = '900 120px "Noto Sans CJK SC"'; g.textAlign = 'center'; g.textBaseline = 'middle';
+      const n = C.bubble.length; for (let i = 0; i < n; i++) { const d = E.outBack(inv(0.35 + i * 0.12, 0.75 + i * 0.12, mt)); g.save(); g.translate(CXc - (n - 1) * 62 + i * 124, cy + 6 + (1 - d) * 40); g.scale(d, d); g.fillText(C.bubble[i], 0, 0); g.restore(); } }
+    g.restore(); g.globalAlpha = 1;
+    // orbiting confetti dots that get flung on each morph
+    for (let i = 0; i < 14; i++) {
+      const a0 = hash(i) * 6.28 + t * (0.4 + hash(i + 1) * 0.5), fl = k > 0 ? Math.exp(-mt * 3) * 140 : 0;
+      const rr = 380 + hash(i + 2) * 120 + fl;
+      g.fillStyle = [SH[k].fg, '#ffffff', SH[k].ac][i % 3]; g.globalAlpha = 0.9;
+      g.beginPath(); g.arc(CXc + Math.cos(a0) * rr * 1.3, cy + Math.sin(a0) * rr * 0.75, 6 + hash(i + 3) * 10, 0, 6.3); g.fill();
+    }
+    g.globalAlpha = 1;
+    // label (chip) below the shape
+    const lab = C.labels[k]; const la = E.outCubic(inv(0.3, 0.7, k > 0 ? mt : t));
+    const dark = k === 2 || k === 1;
+    g.font = '800 30px "Noto Sans CJK SC"'; const lw = g.measureText(lab).width + 60;
+    g.save(); g.globalAlpha = la; g.translate(CXc, 905 + (1 - la) * 20);
+    g.fillStyle = dark ? 'rgba(20,20,40,.88)' : 'rgba(255,255,255,.92)'; g.beginPath(); g.roundRect(-lw / 2, -30, lw, 60, 30); g.fill();
+    g.fillStyle = dark ? '#fff' : '#1d1630'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(lab, 0, 2); g.restore();
+    // progress pips
+    for (let i = 0; i < 5; i++) { g.fillStyle = i <= k ? (dark ? '#1d1630' : '#ffffff') : (dark ? 'rgba(29,22,48,.25)' : 'rgba(255,255,255,.3)'); g.beginPath(); g.roundRect(CXc - 110 + i * 46, 980, i === k ? 38 : 26, 8, 4); g.fill(); }
+    // final title
+    const ta = E.outBack(inv(6.5, 6.95, t));
+    if (ta > 0) { g.save(); g.globalAlpha = ta; g.font = '900 110px "Noto Sans CJK SC"'; g.fillStyle = '#fff7ef'; g.textAlign = 'center'; g.shadowColor = 'rgba(0,0,0,.25)'; g.shadowOffsetY = 8; g.shadowBlur = 0; g.translate(960, 215); g.scale(0.6 + 0.4 * ta, 0.6 + 0.4 * ta); g.fillText(C.title, 0, 0); g.shadowColor = 'transparent'; g.font = '800 28px Inter'; g.letterSpacing = '14px'; g.fillText(C.en, 7, 62); g.restore(); }
+    g.save(); g.font = '700 18px Inter'; g.fillStyle = dark ? 'rgba(29,22,48,.5)' : 'rgba(255,255,255,.55)'; g.textAlign = 'right'; g.letterSpacing = '4px'; g.fillText(C.sign, 1800, 160); g.restore();
+  },
+});
+</script></body></html>

@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>18 水墨国风 · Ink Bamboo</title>
+<script src="../../lib/core.js"></script>
+</head><body><div id="stage"></div>
+<script>
+/* ===== 18 水墨国风 · 墨竹清风 =====
+   Bamboo painted the way it is taught: culms stroke by stroke from the ground up with a dark node at every joint,
+   then branches, then leaves flicked in clusters — dark in front, pale behind. Every stroke is stamped from a
+   bristle brush (dry-brush streaks, pressure taper) and feathers into the xuan paper. A gust bends the grove
+   (the hook), a pale moon blooms, 「清风」 is written in, and the seal lands. */
+const { E, clamp, inv, lerp, rng, hash, noise1 } = Reel;
+const stage = Reel.makeStage('#efe9dc');
+const C = Reel.cfg({ text: '清风', seal: ['肖', '雄'], sign: 'XIAOXIONG' });
+const out = Reel.canvas2d(stage); const g = out.ctx;
+const K = Reel.RS, PW = Math.round(1920 * K), PH = Math.round(1080 * K);
+const mk = () => { const c = document.createElement('canvas'); c.width = PW; c.height = PH; return c; };
+const INK = mk(), ik = INK.getContext('2d');
+let PAPER, CAL, SEAL;
+const R = rng(18);
+function makePaper() { const c = mk(), x = c.getContext('2d', { willReadFrequently: true }); x.scale(K, K);
+  x.fillStyle = '#efe9dc'; x.fillRect(0, 0, 1920, 1080); const r = rng(2);
+  for (let i = 0; i < 26; i++) { const gx = r() * 1920, gy = r() * 1080, rr = 200 + r() * 500; const gr = x.createRadialGradient(gx, gy, 0, gx, gy, rr); gr.addColorStop(0, `rgba(${r() < 0.5 ? '255,255,250' : '200,185,150'},.05)`); gr.addColorStop(1, 'rgba(0,0,0,0)'); x.fillStyle = gr; x.fillRect(0, 0, 1920, 1080); }
+  for (let i = 0; i < 2600; i++) { x.strokeStyle = `rgba(160,140,100,${0.04 + r() * 0.08})`; x.lineWidth = 0.5 + r() * 0.7; const px = r() * 1920, py = r() * 1080, a = r() * 6.3, l = 6 + r() * 40; x.beginPath(); x.moveTo(px, py); x.quadraticCurveTo(px + Math.cos(a + 0.4) * l * 0.5, py + Math.sin(a + 0.4) * l * 0.5, px + Math.cos(a) * l, py + Math.sin(a) * l); x.stroke(); }
+  for (let i = 0; i < 9000; i++) { x.fillStyle = `rgba(120,100,70,${0.03 + r() * 0.05})`; x.fillRect(r() * 1920, r() * 1080, 1, 1); }
+  return c; }
+// ---------- geometry ----------
+const CULMS = [ { x: 760, base: 1120, top: 60, w: 30, ink: 0.92, lean: 0.10, segs: 7, t0: 0.2 }, { x: 980, base: 1120, top: 210, w: 24, ink: 0.55, lean: -0.05, segs: 6, t0: 1.1 }, { x: 590, base: 1120, top: 330, w: 20, ink: 0.35, lean: 0.16, segs: 5, t0: 1.8 } ];
+CULMS.forEach((c) => { c.nodes = []; const H = c.base - c.top; let y = c.base; for (let i = 0; i <= c.segs; i++) { c.nodes.push(y); y -= H / c.segs * (0.85 + 0.3 * R()); } c.nodes[c.nodes.length - 1] = Math.max(c.top, c.nodes[c.nodes.length - 1]); });
+const LEAVES = []; const BR = [];
+CULMS.forEach((c, ci) => { for (let n = 2; n < c.nodes.length; n++) { if (R() < 0.35) continue; const side = R() < 0.5 ? -1 : 1; const y = c.nodes[n];
+  const br = { ci, y, side, len: 120 + R() * 120, ang: -0.9 * side - 0.35 + R() * 0.3, t0: 3.2 + R() * 0.6 }; BR.push(br);
+  const nl = 3 + (R() * 3 | 0); for (let k = 0; k < nl; k++) LEAVES.push({ br: BR.length - 1, u: 0.6 + R() * 0.4, ang: (side > 0 ? 0.3 : 2.84) + (R() - 0.5) * 1.6 + 0.6, len: 150 + R() * 110, w: 22 + R() * 10, ink: c.ink * (0.75 + R() * 0.35), t0: 3.6 + LEAVES.length * 0.06 + R() * 0.2, seed: R() * 99 }); } });
+// ---------- brush ----------
+// stamp a stroke along a polyline with pressure profile; bristles = parallel offset streaks with gaps (dry brush)
+function brush(x, pts, wFn, ink, p, seed, dry = 0.3) {
+  const n = Math.max(2, Math.floor(pts.length * clamp(p))); if (n < 2) return;
+  const L = [], Rr = [];
+  for (let i = 0; i < n; i++) { const [px, py] = pts[i]; const u = i / (pts.length - 1); const w = wFn(u) / 2;
+    const [qx, qy] = pts[Math.min(pts.length - 1, i + 1)], [rx, ry] = pts[Math.max(0, i - 1)]; let tx = qx - rx, ty = qy - ry; const l = Math.hypot(tx, ty) || 1; tx /= l; ty /= l;
+    const jl = 1 + 0.12 * (hash(seed + i * 1.3) - 0.5), jr = 1 + 0.12 * (hash(seed + i * 2.1) - 0.5);
+    L.push([px - ty * w * jl, py + tx * w * jl]); Rr.push([px + ty * w * jr, py - tx * w * jr]); }
+  x.beginPath(); L.forEach(([a, b], i) => (i ? x.lineTo(a, b) : x.moveTo(a, b))); for (let i = Rr.length - 1; i >= 0; i--) x.lineTo(Rr[i][0], Rr[i][1]); x.closePath();
+  x.fillStyle = `rgba(18,16,14,${ink * 0.78})`; x.fill();
+  // darker edges (ink pools at the stroke boundary)
+  x.lineWidth = 1.6; x.strokeStyle = `rgba(10,9,8,${ink * 0.35})`; x.stroke();
+  // fly-white: dry streaks carved out toward the tail
+  if (dry > 0) { x.save(); x.globalCompositeOperation = 'destination-out';
+    for (let b = 0; b < 7; b++) { if (hash(seed + b * 5.7) > dry * 1.6) continue; const off = (hash(seed + b * 3.3) - 0.5) * 0.8; const u0 = 0.35 + hash(seed + b) * 0.4;
+      x.beginPath(); let st = false; for (let i = Math.floor(u0 * (pts.length - 1)); i < n; i++) { const u = i / (pts.length - 1); const w = wFn(u); const [px, py] = pts[i]; const [qx, qy] = pts[Math.min(pts.length - 1, i + 1)], [rx, ry] = pts[Math.max(0, i - 1)]; let tx = qx - rx, ty = qy - ry; const l = Math.hypot(tx, ty) || 1; tx /= l; ty /= l;
+        const X = px - ty * off * w, Y = py + tx * off * w; st ? x.lineTo(X, Y) : x.moveTo(X, Y); st = true; }
+      x.lineWidth = 1 + hash(seed + b * 9) * 2.2; x.strokeStyle = `rgba(0,0,0,${0.45 + hash(seed + b) * 0.4})`; x.stroke(); }
+    x.restore(); }
+}
+function sway(y, base, top, wind) { const h = clamp((base - y) / (base - top)); return wind * h * h * 90; }
+function culmPts(c, y0, y1, wind) { const pts = []; for (let k = 0; k <= 12; k++) { const y = lerp(y0, y1, k / 12); pts.push([c.x + (c.base - y) * c.lean + sway(y, c.base, c.top, wind) + Math.sin(y * 0.01) * 3, y]); } return pts; }
+function nodeXY(c, y, wind) { return [c.x + (c.base - y) * c.lean + sway(y, c.base, c.top, wind), y]; }
+function makeCal() { // calligraphy: rendered then roughened like a brush on absorbent paper
+  const c = document.createElement('canvas'); c.width = 260 * K | 0; c.height = 560 * K | 0; const x = c.getContext('2d', { willReadFrequently: true }); x.scale(K, K);
+  x.font = '900 210px "Noto Serif CJK SC"'; x.fillStyle = '#141210'; x.textAlign = 'center'; x.textBaseline = 'top'; x.fillText(C.text[0], 130, 20); x.fillText(C.text[1], 130, 280);
+  const id = x.getImageData(0, 0, c.width, c.height), d = id.data, w = c.width; for (let i = 0; i < d.length; i += 4) { if (!d[i + 3]) continue; const px = (i / 4) % w, py = (i / 4 / w) | 0; const n = Reel.noise2(px * 0.08, py * 0.02) * 0.5 + Reel.noise2(px * 0.5, py * 0.5) * 0.3; d[i + 3] *= clamp(0.85 + n * 0.6); }
+  x.putImageData(id, 0, 0); return c; }
+function makeSeal() { const s = 150 * K, c = document.createElement('canvas'); c.width = s; c.height = s; const x = c.getContext('2d', { willReadFrequently: true }); x.scale(K, K);
+  x.fillStyle = '#b8261e'; x.beginPath(); x.roundRect(6, 6, 138, 138, 10); x.fill(); x.globalCompositeOperation = 'destination-out'; x.font = '900 60px "Noto Serif CJK SC"'; x.textAlign = 'center'; x.textBaseline = 'middle';
+  x.fillText(C.seal[0], 75, 44); x.fillText(C.seal[1], 75, 106); x.lineWidth = 4; x.strokeRect(14, 14, 122, 122);
+  const id = x.getImageData(0, 0, c.width, c.height), d = id.data; for (let i = 3; i < d.length; i += 4) if (d[i] && Math.random !== null && hash(i * 0.37) < 0.08) d[i] *= 0.3; x.putImageData(id, 0, 0); return c; }
+Reel.scene({
+  duration: 10, fps: 30,
+  fonts: ['900 210px "Noto Serif CJK SC"', '900 60px "Noto Serif CJK SC"', '600 16px Inter'],
+  async setup() { PAPER = makePaper(); CAL = makeCal(); SEAL = makeSeal(); },
+  cues: [{ t: 0.15, sfx: 'brush', gain: 0.7 }, { t: 1.1, sfx: 'brush', gain: 0.6 }, { t: 1.8, sfx: 'brush', gain: 0.5 }, { t: 3.2, sfx: 'guzheng', gain: 0.6 }, { t: 3.7, sfx: 'brush', gain: 0.4 }, { t: 4.3, sfx: 'brush', gain: 0.4 },
+    { t: 5.4, sfx: 'whoosh', gain: 0.8 }, { t: 5.6, sfx: 'swell', gain: 0.5 }, { t: 7.0, sfx: 'brush', gain: 0.7 }, { t: 7.6, sfx: 'guzheng', gain: 0.7 }, { t: 8.6, sfx: 'stamp', gain: 1.0 }],
+  render(t) {
+    const OPEN_T0 = 1.6; if (t < 2) t = OPEN_T0 + (2 - OPEN_T0) * t / 2; // no blank opening: frame 0 starts mid-intro
+
+    const wind = 0.35 * Math.sin(t * 1.3) * 0.15 + (t > 5.3 ? Math.exp(-(t - 5.3) * 0.9) * Math.sin((t - 5.3) * 4.2) * 1.0 + 0.25 * E.outCubic(inv(5.3, 5.8, t)) * (1 - inv(6, 9, t)) : 0);
+    ik.setTransform(K, 0, 0, K, 0, 0); ik.clearRect(0, 0, 1920, 1080);
+    // moon wash (blooms behind)
+    const mw = E.outCubic(inv(5.6, 7.2, t)); if (mw > 0) { const gr = ik.createRadialGradient(1250, 215, 10, 1250, 215, 520); gr.addColorStop(0, 'rgba(30,28,26,0)'); gr.addColorStop(0.34, 'rgba(30,28,26,0)'); gr.addColorStop(0.37, `rgba(30,28,26,${0.13 * mw})`); gr.addColorStop(1, 'rgba(30,28,26,0)'); ik.fillStyle = gr; ik.fillRect(0, 0, 1920, 1080); }
+    // culms back-to-front (pale first)
+    [2, 1, 0].forEach((ci) => { const c = CULMS[ci];
+      for (let s = 0; s < c.nodes.length - 1; s++) { const p = clamp((t - c.t0 - s * 0.26) / 0.24); if (p <= 0) continue;
+        const y0 = c.nodes[s] - 6, y1 = c.nodes[s + 1] + 6; const pts = culmPts(c, y0, y1, wind);
+        brush(ik, pts, (u) => c.w * (1 - 0.1 * Math.sin(u * Math.PI)) * (u < 0.08 ? 1.15 : 1), c.ink, p, ci * 50 + s, 0.35);
+        if (p >= 1 && s < c.nodes.length - 2) { const [nx, ny] = nodeXY(c, c.nodes[s + 1], wind); const nd = [[nx - c.w * 0.75, ny + 4], [nx - c.w * 0.2, ny - 3], [nx + c.w * 0.3, ny - 2], [nx + c.w * 0.8, ny + 5]]; brush(ik, nd, (u) => 9 * Math.sin(0.2 + u * 2.7), Math.min(1, c.ink * 1.3), 1, ci * 90 + s, 0.1); } } });
+    // branches
+    BR.forEach((b, i) => { const p = clamp((t - b.t0) / 0.3); if (p <= 0) return; const c = CULMS[b.ci]; const [bx, by] = nodeXY(c, b.y, wind);
+      const pts = []; for (let k = 0; k <= 10; k++) { const u = k / 10; pts.push([bx + Math.cos(b.ang) * b.len * u + sway(by - b.len * u, c.base, c.top, wind) * 0.3 * u, by + Math.sin(b.ang) * b.len * u + Math.sin(u * 3) * 6]); }
+      b.pts = pts; brush(ik, pts, (u) => 7 * (1 - u * 0.6), c.ink, p, 300 + i, 0.2); });
+    // leaves (flicked: thick belly, sharp tip), gust detaches a few
+    LEAVES.forEach((l, i) => { const p = clamp((t - l.t0) / 0.16); if (p <= 0) return; const b = BR[l.br]; if (!b.pts) return; const ai = Math.floor(l.u * 10); let [lx, ly] = b.pts[ai];
+      let ang = l.ang + wind * 0.5 * Math.sin(i) + Math.sin(t * 2 + i) * 0.04;
+      if (i % 9 === 4 && t > 5.4) { const u = t - 5.4 - (i % 3) * 0.1; if (u > 0) { lx += u * 520 + Math.sin(u * 3 + i) * 40; ly += -u * 140 + u * u * 60; ang += u * 3; } }
+      const pts = []; for (let k = 0; k <= 12; k++) { const u = k / 12; const bend = Math.sin(u * Math.PI) * 0.12 * (i % 2 ? 1 : -1); pts.push([lx + Math.cos(ang + bend) * l.len * u, ly + Math.sin(ang + bend) * l.len * u]); }
+      brush(ik, pts, (u) => l.w * Math.pow(Math.sin(Math.min(1, u * 1.15) * Math.PI), 0.7) * (u < 0.1 ? 0.6 + u * 4 : 1), l.ink, p, 500 + l.seed, 0.25); });
+    // calligraphy reveal + seal
+    const cp = inv(6.0, 6.8, t);
+    if (cp > 0) { ik.save(); ik.beginPath(); ik.rect(1440, 330, 300, 560 * E.inOutSine(cp)); ik.clip(); ik.drawImage(CAL, 1460, 330, 260, 560); ik.restore(); }
+    // ---- compose: paper, feathered ink halo, ink ----
+    out.begin(); g.setTransform(1, 0, 0, 1, 0, 0);
+    const z = 1.06 - 0.06 * E.inOutSine(clamp(t / 10)), dx = 30 * E.inOutSine(clamp(t / 10));
+    g.translate(PW / 2, PH / 2); g.scale(z, z); g.translate(-PW / 2 - dx * K, -PH / 2);
+    g.drawImage(PAPER, 0, 0);
+    g.globalAlpha = 0.35; g.filter = `blur(${3.5 * K}px)`; g.drawImage(INK, 0, 0); g.filter = 'none'; g.globalAlpha = 1;
+    g.globalCompositeOperation = 'multiply'; g.drawImage(INK, 0, 0); g.globalCompositeOperation = 'source-over';
+    if (t > 6.9) { const s = 1 + 0.25 * Math.exp(-(t - 6.9) * 18); g.save(); g.globalCompositeOperation = 'multiply'; g.globalAlpha = 0.92; g.translate(1600 * K, 960 * K); g.rotate(0.03); g.scale(s, s); g.drawImage(SEAL, -SEAL.width * 0.5 * 0.82, -SEAL.height * 0.5 * 0.82, SEAL.width * 0.82, SEAL.height * 0.82); g.restore(); }
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    const vg = g.createRadialGradient(PW / 2, PH / 2, PH * 0.45, PW / 2, PH / 2, PW * 0.62); vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(90,70,40,.2)'); g.fillStyle = vg; g.fillRect(0, 0, PW, PH);
+  },
+});
+</script></body></html>

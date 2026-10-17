@@ -1,0 +1,191 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>03 扁平矢量 · Chain Reaction</title>
+<script src="../../lib/core.js"></script>
+</head><body><div id="stage"></div>
+<script>
+/* ===== 03 扁平矢量 · 连锁反应 CHAIN REACTION =====
+   A flat-vector Rube Goldberg machine spanning four colour fields. Every contact lands on the beat: marble -> 8 dominoes
+   (1/16 notes) -> seesaw -> ball into a pulley cup -> spring glove -> books -> toy car drops 1.2 screens onto a big red
+   button (4.5 s hook: flash, whip pull-back, the whole machine fires). A blue ball flips four letter tiles: 连锁反应. */
+const { E, clamp, inv, lerp, rng, hash, spring } = Reel;
+const stage = Reel.makeStage('#f6ead7');
+const C = Reel.cfg({ tiles: ['连', '锁', '反', '应'], en: 'CHAIN REACTION' });
+const cv = Reel.canvas2d(stage); const g = cv.ctx;
+const EV = { domino0: 0.5, seesaw: 1.5, cup: 2.0, glove: 2.5, books: 3.0, edge: 3.5, hook: 4.5, ball: 5.0, tiles: 6.5 };
+const PAL = { cream: '#f6ead7', mint: '#bfe6d6', coral: '#ffb7a1', navy: '#263159', red: '#ff5a4e', yel: '#ffc93c', blue: '#2f6bff', green: '#1f9a7c', ink: '#1e2240', wood: '#e0a15e', white: '#fffaf0' };
+const hex = (h) => { const n = parseInt(h.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; };
+const dk = (h, k = 0.78) => { const c = hex(h); return `rgb(${c[0] * k | 0},${c[1] * k | 0},${c[2] * k | 0})`; };
+const lt = (h, k = 0.35) => { const c = hex(h); return `rgb(${c[0] + (255 - c[0]) * k | 0},${c[1] + (255 - c[1]) * k | 0},${c[2] + (255 - c[2]) * k | 0})`; };
+function rr(x, y, w, h, r) { g.beginPath(); g.roundRect(x, y, w, h, r); }
+// a flat object = shadow block (offset down-right, darker) + base + highlight strip
+function blockF(x, y, w, h, col, r = 12, o = {}) {
+  g.fillStyle = 'rgba(30,34,64,.16)'; rr(x + 10, y + 10, w, h, r); g.fill();
+  g.fillStyle = col; rr(x, y, w, h, r); g.fill();
+  if (!o.flat) { g.fillStyle = dk(col, 0.86); rr(x, y + h * 0.62, w, h * 0.38, [0, 0, r, r]); g.fill(); g.fillStyle = lt(col, 0.4); rr(x + 8, y + 7, Math.max(4, w * 0.3), Math.max(4, Math.min(10, h * 0.12)), 4); g.fill(); }
+}
+function ball(x, y, r, col, sq = 0) { g.fillStyle = 'rgba(30,34,64,.16)'; g.beginPath(); g.ellipse(x + 8, y + 8, r, r, 0, 0, 6.3); g.fill();
+  g.save(); g.translate(x, y); g.scale(1 + sq, 1 - sq); g.fillStyle = col; g.beginPath(); g.arc(0, 0, r, 0, 6.3); g.fill(); g.fillStyle = dk(col, 0.85); g.beginPath(); g.arc(0, 0, r, 0.2, 2.9); g.fill(); g.fillStyle = 'rgba(255,255,255,.65)'; g.beginPath(); g.ellipse(-r * 0.35, -r * 0.4, r * 0.28, r * 0.18, -0.6, 0, 6.3); g.fill(); g.restore(); }
+function smear(x0, y0, x1, y1, r, col) { const d = Math.hypot(x1 - x0, y1 - y0); if (d < r * 0.8) return; g.save(); g.globalAlpha = 0.3; g.strokeStyle = col; g.lineCap = 'round'; g.lineWidth = r * 1.6; g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke(); g.restore(); }
+// ---------- world layout ----------
+const FLOOR = 1500;
+const ZIG = [[60, 120], [620, 260], [140, 400], [880, 560]]; // marble ramp polyline (zig-zag)
+const SEG = ZIG.slice(1).map((p, i) => Math.hypot(p[0] - ZIG[i][0], p[1] - ZIG[i][1])); const ZL = SEG.reduce((a, b) => a + b, 0);
+function along(s) { let i = 0; while (i < SEG.length - 1 && s > SEG[i]) { s -= SEG[i]; i++; } const u = clamp(s / SEG[i]); return [lerp(ZIG[i][0], ZIG[i + 1][0], u), lerp(ZIG[i][1], ZIG[i + 1][1], u)]; }
+const SHELF = 640, DOM = Array.from({ length: 8 }, (_, k) => ({ x: 960 + k * 62 })), DH = 150, DW = 26;
+const SEE = { x: 1560, y: SHELF - 40, L: 360 };
+const CUP = { x: 2140, y0: 330 }, PUL = { x: 2140, y: 150 }, LATCH = { x: 2330, y: 560 };
+const GLOVE = { x: 2380, y: 520 }, BOOKS = { x: 2700 }, CAR = { x0: 2780, xe: 3020 }, BTN = { x: 3170, y: FLOOR };
+const TILE = { x0: 3820, w: 240, h: 260, gap: 30 };
+// ---------- mechanisms ----------
+function bg(t) {
+  g.fillStyle = PAL.cream; g.fillRect(-2000, -2000, 9000, 6000);
+  g.fillStyle = PAL.mint; g.beginPath(); g.arc(2700, 300, 1250, 0, 6.3); g.fill();
+  g.fillStyle = PAL.coral; g.beginPath(); g.arc(4300, 1500, 1500, 0, 6.3); g.fill();
+  g.fillStyle = PAL.navy; g.beginPath(); g.arc(1600, 2500, 1300, 0, 6.3); g.fill();
+  // low-contrast geometric decoration
+  for (let k = 0; k < 60; k++) { const x = hash(k) * 5200 - 200, y = hash(k + 7) * 1900 - 100; g.fillStyle = 'rgba(255,255,255,.22)'; g.beginPath(); g.arc(x, y, 6 + hash(k + 3) * 10, 0, 6.3); g.fill(); }
+  g.strokeStyle = 'rgba(255,255,255,.28)'; g.lineWidth = 8; g.lineCap = 'round'; for (let k = 0; k < 8; k++) { const x = hash(k * 5) * 4800, y = hash(k * 9) * 1500; g.beginPath(); for (let q = 0; q < 6; q++) g.lineTo(x + q * 30, y + (q % 2) * 18); g.stroke(); }
+}
+function structure() {
+  // shelves, ramp, floor
+  g.strokeStyle = PAL.ink; g.lineCap = 'round'; g.lineJoin = 'round';
+  g.lineWidth = 14; g.beginPath(); ZIG.forEach((p, i) => (i ? g.lineTo(p[0], p[1] + 22) : g.moveTo(p[0], p[1] + 22))); g.stroke();
+  for (let i = 0; i < ZIG.length - 1; i++) { g.strokeStyle = dk(PAL.wood, 0.9); g.lineWidth = 6; g.beginPath(); g.moveTo(ZIG[i][0], ZIG[i][1] + 22); g.lineTo(ZIG[i][0], ZIG[i][1] + 80); g.stroke(); }
+  blockF(820, SHELF, 2000, 30, PAL.wood, 10);  // long shelf
+  for (const x of [900, 1500, 2100, 2700]) blockF(x, SHELF + 30, 22, 900, dk(PAL.wood, 0.85), 6, { flat: true });
+  blockF(2820, SHELF - 10, 220, 30, PAL.wood, 10); // car ramp ledge (slightly lower)
+  blockF(-500, FLOOR, 6000, 1600, '#e8c79b', 0); g.fillStyle = '#d7b383'; g.fillRect(-500, FLOOR, 6000, 18);
+  // pulley + rope frame
+  blockF(PUL.x - 220, PUL.y - 30, 330, 24, PAL.ink, 8); blockF(PUL.x - 220, PUL.y - 30, 20, SHELF - PUL.y + 30, PAL.ink, 8, { flat: true });
+}
+function marble(t) {
+  if (t < EV.domino0) { const s = ZL * E.inQuad(clamp((t + 0.6) / (EV.domino0 + 0.6))); const s0 = ZL * E.inQuad(clamp((t + 0.55) / (EV.domino0 + 0.6))); const [x, y] = along(s), [xp, yp] = along(Math.max(0, s - 90));
+    smear(xp, yp, x, y, 22, PAL.yel); ball(x, y, 22, PAL.yel); void s0; return; }
+  const a = t - EV.domino0; ball(DOM[0].x - 34 - Math.min(40, a * 30), SHELF - 22, 22, PAL.yel);
+}
+function dominoAngle(k, t) { const t0 = EV.domino0 + k * 0.125; if (t < t0) return 0; const a = (t - t0) / 0.14; return k === 7 ? Math.min(1.25, E.inQuad(clamp(a)) * 1.25) : Math.min(1.05, E.inQuad(clamp(a)) * 1.05); }
+function dominoes(t) {
+  DOM.forEach((d, k) => { const an = dominoAngle(k, t); g.save(); g.translate(d.x + DW, SHELF); g.rotate(an); blockF(-DW, -DH, DW, DH, k % 2 ? PAL.blue : lt(PAL.blue, 0.15), 6, { flat: true }); g.fillStyle = PAL.white; g.beginPath(); g.arc(-DW / 2, -DH * 0.7, 4, 0, 6.3); g.arc(-DW / 2, -DH * 0.3, 4, 0, 6.3); g.fill(); g.restore(); });
+}
+function seesaw(t) {
+  const tilt = t < EV.seesaw ? -0.16 : lerp(-0.16, 0.2, E.outBack(clamp((t - EV.seesaw) / 0.1)));
+  g.fillStyle = PAL.ink; g.beginPath(); g.moveTo(SEE.x - 40, SHELF); g.lineTo(SEE.x + 40, SHELF); g.lineTo(SEE.x, SEE.y); g.fill();
+  g.save(); g.translate(SEE.x, SEE.y); g.rotate(tilt); blockF(-SEE.L / 2, -14, SEE.L, 20, PAL.green, 8); g.restore();
+  // red ball: sits on the right end, then flies into the cup
+  const ex = SEE.x + Math.cos(tilt) * SEE.L / 2 - 30, ey = SEE.y + Math.sin(tilt) * SEE.L / 2 - 40;
+  if (t < EV.seesaw) ball(ex, ey, 26, PAL.red);
+  else if (t < EV.cup) { const u = (t - EV.seesaw) / (EV.cup - EV.seesaw); const x = lerp(ex, CUP.x, u), y = lerp(ey, CUP.y0 + 10, u) - 420 * 4 * u * (1 - u) * 0.9; const up = Math.max(0, u - 0.06); const xp = lerp(ex, CUP.x, up), yp = lerp(ey, CUP.y0 + 10, up) - 420 * 4 * up * (1 - up) * 0.9; smear(xp, yp, x, y, 26, PAL.red); ball(x, y, 26, PAL.red, 0.08); }
+}
+function pulley(t) {
+  const drop = t < EV.cup ? 0 : 150 * E.outBack(clamp((t - EV.cup) / 0.3));
+  const cy = CUP.y0 + drop;
+  g.strokeStyle = PAL.ink; g.lineWidth = 4; g.beginPath(); g.moveTo(CUP.x, PUL.y); g.lineTo(CUP.x, cy - 40); g.stroke(); // rope to cup
+  g.beginPath(); g.moveTo(PUL.x + 30, PUL.y); g.lineTo(LATCH.x, PUL.y); g.lineTo(LATCH.x, LATCH.y - drop * 0.3 - 40); g.stroke();
+  const rot = drop * 0.03; g.save(); g.translate(PUL.x + 15, PUL.y); g.rotate(rot); g.fillStyle = PAL.yel; g.beginPath(); g.arc(0, 0, 30, 0, 6.3); g.fill(); g.fillStyle = PAL.ink; g.fillRect(-4, -26, 8, 52); g.beginPath(); g.arc(0, 0, 8, 0, 6.3); g.fill(); g.restore();
+  // cup
+  g.fillStyle = 'rgba(30,34,64,.16)'; g.beginPath(); g.moveTo(CUP.x - 46 + 8, cy - 40 + 8); g.lineTo(CUP.x + 46 + 8, cy - 40 + 8); g.lineTo(CUP.x + 34 + 8, cy + 30 + 8); g.lineTo(CUP.x - 34 + 8, cy + 30 + 8); g.fill();
+  g.fillStyle = PAL.blue; g.beginPath(); g.moveTo(CUP.x - 46, cy - 40); g.lineTo(CUP.x + 46, cy - 40); g.lineTo(CUP.x + 34, cy + 30); g.lineTo(CUP.x - 34, cy + 30); g.fill();
+  if (t >= EV.cup) ball(CUP.x, cy - 44, 26, PAL.red);
+  g.fillStyle = PAL.blue; g.fillRect(CUP.x - 46, cy - 46, 92, 10);
+}
+function glove(t) {
+  // spring box; glove anticipates (pulls back 2 frames) then shoots on the beat
+  blockF(GLOVE.x - 60, GLOVE.y - 20, 110, 120, PAL.red, 14);
+  let ext = 0; if (t >= EV.glove - 0.07 && t < EV.glove) ext = -18; else if (t >= EV.glove) ext = 250 * spring(t - EV.glove, { k: 220, c: 11 });
+  const zx = GLOVE.x + 50; g.strokeStyle = PAL.ink; g.lineWidth = 5; g.beginPath(); for (let k = 0; k <= 8; k++) g.lineTo(zx + Math.max(0, ext) * k / 8, GLOVE.y + 40 + (k % 2 ? -22 : 22)); g.stroke();
+  const gx = zx + Math.max(0, ext) + (ext < 0 ? ext : 0);
+  g.fillStyle = 'rgba(30,34,64,.16)'; g.beginPath(); g.ellipse(gx + 50 + 8, GLOVE.y + 40 + 8, 54, 46, 0, 0, 6.3); g.fill();
+  g.fillStyle = '#d9342b'; g.beginPath(); g.ellipse(gx + 50, GLOVE.y + 40, 54, 46, 0, 0, 6.3); g.fill(); g.fillStyle = '#ff7469'; g.beginPath(); g.ellipse(gx + 34, GLOVE.y + 22, 20, 12, -0.4, 0, 6.3); g.fill();
+  g.fillStyle = '#b8261e'; rr(gx + 4, GLOVE.y + 26, 22, 30, 6); g.fill();
+}
+function books(t) {
+  const fall = t < EV.books ? 0 : E.outBounce ? 0 : 0; void fall;
+  const a = t < EV.books ? 0 : E.inQuad(clamp((t - EV.books) / 0.22));
+  const cols = [PAL.green, PAL.yel, PAL.blue, PAL.red, PAL.coral];
+  cols.forEach((c, k) => { g.save(); const px = BOOKS.x + 90, py = SHELF; g.translate(px, py); g.rotate(a * (1.2 + k * 0.08)); blockF(-90, -40 - k * 40, 140 - k * 8, 38, c, 6); g.restore(); });
+  // toy car, pushed down the ledge then off the edge
+  let x, y, rot = 0; const tc = EV.books + 0.1;
+  if (t < tc) { x = CAR.x0; y = SHELF - 10; }
+  else if (t < EV.edge) { const u = E.inQuad(clamp((t - tc) / (EV.edge - tc))); x = lerp(CAR.x0, CAR.xe, u); y = SHELF - 10; }
+  else if (t < EV.hook) { const u = (t - EV.edge) / (EV.hook - EV.edge); x = lerp(CAR.xe, BTN.x - 40, u); y = lerp(SHELF - 10, BTN.y - 96, u * u); rot = u * 0.5; }
+  else { const s = spring(t - EV.hook, { k: 300, c: 16 }); x = BTN.x - 40; y = BTN.y - 96 + 30 - 30 * s; rot = 0.5 * (1 - s); }
+  car(x, y, rot, t);
+}
+function car(x, y, rot, t) {
+  g.save(); g.translate(x, y); g.rotate(rot);
+  blockF(-80, -70, 160, 50, PAL.yel, 16); blockF(-40, -112, 90, 46, lt(PAL.yel, 0.1), 14); g.fillStyle = '#bfe8ff'; rr(-28, -102, 30, 28, 6); g.fill(); rr(8, -102, 32, 28, 6); g.fill();
+  for (const wx of [-48, 48]) { g.fillStyle = PAL.ink; g.beginPath(); g.arc(wx, -18, 20, 0, 6.3); g.fill(); g.fillStyle = PAL.white; g.beginPath(); g.arc(wx, -18, 7, 0, 6.3); g.fill(); }
+  g.restore();
+}
+function button(t) {
+  const sq = t < EV.hook ? 0 : 0.3 * (1 - spring(t - EV.hook, { k: 260, c: 12 }));
+  blockF(BTN.x - 150, BTN.y - 50, 300, 50, PAL.ink, 12);
+  const h = 70 * (1 - sq); g.fillStyle = 'rgba(30,34,64,.16)'; rr(BTN.x - 104 + 10, BTN.y - 50 - h + 10, 208, h, [60, 60, 8, 8]); g.fill();
+  g.fillStyle = PAL.red; rr(BTN.x - 104, BTN.y - 50 - h, 208, h, [60, 60, 8, 8]); g.fill(); g.fillStyle = '#ff8a80'; rr(BTN.x - 70, BTN.y - 40 - h, 70, 14, 7); g.fill();
+}
+const ON = (t) => t >= EV.hook;
+function gears(t) { const a = ON(t) ? (t - EV.hook) * 2.4 : 0; gear(2650, 1210, 110, 12, PAL.green, a); gear(2650 + 190, 1210 + 60, 80, 9, PAL.yel, -a * 1.36); gear(2500, 1390, 70, 8, PAL.blue, -a * 1.57); }
+function gear(x, y, r, n, col, a) { g.save(); g.translate(x + 10, y + 10); g.rotate(a); g.fillStyle = 'rgba(30,34,64,.16)'; gearPath(r, n); g.fill(); g.restore(); g.save(); g.translate(x, y); g.rotate(a); g.fillStyle = col; gearPath(r, n); g.fill(); g.fillStyle = dk(col, 0.8); g.beginPath(); g.arc(0, 0, r * 0.32, 0, 6.3); g.fill(); g.fillStyle = PAL.white; g.beginPath(); g.arc(0, 0, r * 0.12, 0, 6.3); g.fill(); g.restore(); }
+function gearPath(r, n) { g.beginPath(); for (let k = 0; k < n * 2; k++) { const a0 = k / (n * 2) * 6.283, a1 = (k + 1) / (n * 2) * 6.283, R = k % 2 ? r : r * 1.18; g.arc(0, 0, R, a0 + 0.05, a1 - 0.05); } g.closePath(); }
+function windmill(t) { const x = 3560, y = 1080; blockF(x - 14, y, 28, FLOOR - y, PAL.ink, 8, { flat: true }); const a = ON(t) ? (t - EV.hook) * 6 * clamp((t - EV.hook) * 2) : 0.3;
+  for (let k = 0; k < 4; k++) { g.save(); g.translate(x, y); g.rotate(a + k * 1.5708); g.fillStyle = [PAL.red, PAL.yel, PAL.blue, PAL.green][k]; g.beginPath(); g.moveTo(0, 0); g.lineTo(150, -20); g.lineTo(150, 40); g.closePath(); g.fill(); g.restore(); } g.fillStyle = PAL.white; g.beginPath(); g.arc(x, y, 14, 0, 6.3); g.fill(); }
+function balloons(t) { const s = ON(t) ? E.outBack(clamp((t - EV.hook - 0.1) / 0.5)) : 0.25; [[2980, 1280, PAL.red], [3060, 1220, PAL.blue], [2920, 1180, PAL.yel]].forEach(([x, y, c], k) => {
+  const yy = y - (s - 0.25) * 60 + Math.sin(t * 2 + k) * 8; g.strokeStyle = PAL.ink; g.lineWidth = 2; g.beginPath(); g.moveTo(x, yy + 70 * s); g.lineTo(3000, FLOOR - 10); g.stroke();
+  g.save(); g.translate(x, yy); g.scale(s, s); g.fillStyle = c; g.beginPath(); g.ellipse(0, 0, 60, 72, 0, 0, 6.3); g.fill(); g.fillStyle = 'rgba(255,255,255,.5)'; g.beginPath(); g.ellipse(-20, -26, 14, 20, -0.5, 0, 6.3); g.fill(); g.restore(); }); }
+function poppers(t) { for (const [x, dir] of [[3360, -0.5], [3720, -0.9], [2380, -0.3]]) { g.save(); g.translate(x, FLOOR); g.rotate(dir); blockF(-24, -110, 48, 110, PAL.navy, 8); g.restore(); }
+  if (!ON(t)) return; const a = t - EV.hook; for (let k = 0; k < 120; k++) { const src = k % 3, [x0, dir] = [[3360, -0.5], [3720, -0.9], [2380, -0.3]][src]; const v = 900 + hash(k) * 700, an = -Math.PI / 2 + dir + (hash(k + 5) - 0.5) * 0.9;
+    const x = x0 + Math.sin(dir) * 110 + Math.cos(an) * v * a * Math.exp(-a * 1.2), y = FLOOR - 110 + Math.sin(an) * v * a * Math.exp(-a * 1.2) + 160 * a * a; if (y > FLOOR) continue;
+    g.save(); g.translate(x, y); g.rotate(a * 8 + k); g.fillStyle = [PAL.red, PAL.yel, PAL.blue, PAL.green, PAL.white][k % 5]; g.fillRect(-9, -5, 18, 10); g.restore(); } }
+function floorConfetti(t) { if (t < EV.hook + 0.8) return; const a = clamp((t - EV.hook - 0.8) / 1.5);
+  for (let k = 0; k < 90; k++) { if (hash(k + 40) > a) continue; const x = 2300 + hash(k) * 2600, y = FLOOR + 6 + hash(k + 2) * 20; g.save(); g.translate(x, y); g.rotate(hash(k + 9) * 3); g.fillStyle = [PAL.red, PAL.yel, PAL.blue, PAL.green, PAL.white][k % 5]; g.fillRect(-9, -4, 18, 8); g.restore(); } }
+function blueBall(t) {
+  // chute from the windmill tower down to the tiles
+  g.strokeStyle = PAL.ink; g.lineWidth = 12; g.lineCap = 'round'; g.beginPath(); g.moveTo(3440, 1180); g.lineTo(3760, 1440); g.stroke();
+  let x, y; if (t < EV.ball) { x = 3440; y = 1150; } else if (t < 6.2) { const u = E.inQuad(clamp((t - EV.ball) / 0.8)); x = lerp(3440, 3760, u); y = lerp(1150, 1410, u); if (t > 5.8) { const v = (t - 5.8) / 0.4; x = lerp(3760, TILE.x0 - 40, clamp(v)); y = FLOOR - 30; } }
+  else { const v = clamp((t - 6.2) / 0.3); x = lerp(TILE.x0 - 40, TILE.x0 - 30, v); y = FLOOR - 30; }
+  ball(x, y, 30, PAL.blue);
+}
+function tiles(t) {
+  const cols = [PAL.red, PAL.yel, PAL.blue, PAL.green];
+  C.tiles.forEach((ch, i) => {
+    const hx = TILE.x0 + i * (TILE.w + TILE.gap) + TILE.w; // hinge at bottom-right of the standing tile
+    const t0 = EV.tiles - 0.05 + i * 0.1; const s = t < t0 ? 0 : spring(t - t0, { k: 420, c: 20 });
+    const an = -Math.PI / 2 * (1 - s); // lying flat (pointing left) -> standing
+    g.save(); g.translate(hx, FLOOR); g.rotate(an);
+    blockF(-TILE.w, -TILE.h, TILE.w, TILE.h, cols[i], 22);
+    g.fillStyle = PAL.white; g.font = '900 170px "Noto Sans CJK SC"'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(ch, -TILE.w / 2, -TILE.h / 2 + 6);
+    g.restore();
+  });
+  const ea = clamp((t - EV.tiles - 0.1) / 0.25); if (ea > 0) { g.save(); g.font = '800 40px Inter'; g.letterSpacing = '16px'; g.textAlign = 'center'; const cx = TILE.x0 + 2 * (TILE.w + TILE.gap) - TILE.gap / 2;
+    [...C.en].forEach((L, k) => { const b = E.outBack(clamp((t - EV.tiles - 0.1 - k * 0.02) / 0.2)); g.fillStyle = PAL.ink; g.globalAlpha = clamp(b * 2); g.fillText(L, cx - 330 + k * 51, FLOOR + 70 - 20 * Math.sin(b * Math.PI)); }); g.restore(); }
+}
+// ---------- camera ----------
+const FOCUS = [[0, 520, 380], [0.5, 820, 420], [1.5, 1420, 420], [2.0, 1950, 380], [2.5, 2330, 420], [3.0, 2650, 440], [3.5, 2980, 470]];
+function camera(t) {
+  let cx, cy, z = 1;
+  if (t < 3.5) { let i = 0; while (i < FOCUS.length - 2 && t > FOCUS[i + 1][0]) i++; const [t0, x0, y0] = FOCUS[i], [t1, x1, y1] = FOCUS[i + 1]; const u = E.inOutSine(clamp((t - t0) / (t1 - t0))); cx = lerp(x0, x1, u); cy = lerp(y0, y1, u); }
+  else if (t < EV.hook) { const u = (t - EV.edge) / (EV.hook - EV.edge); cx = lerp(2980, BTN.x - 40, u); cy = lerp(470, BTN.y - 380, E.inOutSine(u)); }
+  else { const p = spring(t - EV.hook, { k: 120, c: 13 }); cx = lerp(BTN.x - 40, 2500, p); cy = lerp(BTN.y - 380, 860, p); z = lerp(1, 0.36, p);
+    if (t > 6.0) { const q = E.inOutCubic(clamp((t - 6.0) / 0.6)); cx = lerp(cx, TILE.x0 + 2 * (TILE.w + TILE.gap), q); cy = lerp(cy, FLOOR - 100, q); z = lerp(z, 0.85, q) * (1 + 0.03 * clamp((t - 7) / 3)); } }
+  return { cx, cy, z };
+}
+
+Reel.scene({
+  duration: 10, fps: 30,
+  fonts: ['900 170px "Noto Sans CJK SC"', '800 40px Inter'],
+  cues: [{ t: 0.02, sfx: 'roll', gain: 0.6 }, ...Array.from({ length: 8 }, (_, k) => ({ t: EV.domino0 + k * 0.125, sfx: 'block', gain: 0.5 + k * 0.04 })),
+    { t: EV.seesaw, sfx: 'thud', gain: 0.7 }, { t: EV.seesaw + 0.03, sfx: 'whoosh', gain: 0.4 }, { t: EV.cup, sfx: 'land', gain: 0.6 }, { t: EV.glove, sfx: 'boing', gain: 0.8 },
+    { t: EV.books, sfx: 'blocks', gain: 0.7 }, { t: EV.edge, sfx: 'riser_short', gain: 0.6 }, { t: EV.hook, sfx: 'impact', gain: 1.0 }, { t: EV.hook + 0.02, sfx: 'fireworks', gain: 0.6 },
+    { t: 6.0, sfx: 'roll', gain: 0.4 }, ...[0, 1, 2, 3].map((i) => ({ t: EV.tiles + i * 0.125, sfx: 'block', gain: 0.9 })), { t: EV.tiles + 0.45, sfx: 'sparkle', gain: 0.5 }],
+  render(t) {
+    cv.begin();
+    const { cx, cy, z } = camera(t);
+    g.translate(960, 540); g.scale(z, z); g.translate(-cx, -cy);
+    bg(t); structure();
+    gears(t); windmill(t); balloons(t); poppers(t);
+    seesaw(t); dominoes(t); marble(t); pulley(t); glove(t); books(t); button(t); floorConfetti(t); blueBall(t); tiles(t);
+    g.setTransform(Reel.RS, 0, 0, Reel.RS, 0, 0);
+    if (t >= EV.hook && t < EV.hook + 1 / 30) { g.fillStyle = '#fffaf0'; g.fillRect(0, 0, 1920, 1080); }
+  },
+});
+</script></body></html>

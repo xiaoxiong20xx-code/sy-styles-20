@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>17 数据新闻 编辑风 · Milk Tea Economics</title>
+<script src="../../lib/core.js"></script>
+</head><body><div id="stage"></div>
+<script>
+/* ===== 17 数据新闻 · 编辑风 · 一杯奶茶的钱去哪了 =====
+   A magazine spread typeset for real: kicker, serif headline, deck, byline, two justified columns, pull quote.
+   The chart is the cup itself: cost layers pour in one by one with leader lines and rolling percentages;
+   the thin last layer — profit — gets the highlighter and the callout (the hook). Camera reads like an eye. */
+const { E, clamp, inv, lerp, rng, hash, spring } = Reel;
+const stage = Reel.makeStage('#f4efe6');
+const C = Reel.cfg({ kicker: '数据新闻 · 消费观察', head: '一杯 20 元的奶茶', head2: '钱都去哪了？', deck: '我们把一杯奶茶的价格，按成本一层一层倒进杯子里。', by: '文 / 肖雄 XIAOXIONG　·　图表 / 数据编辑部', note: '注：示意数据，按行业常见结构估算，仅用于展示图表形式。' });
+const cv = Reel.canvas2d(stage); const g = cv.ctx;
+const LAYERS = [
+  { k: '原料', v: 30, c: '#c98b4f' }, { k: '人工', v: 20, c: '#e2b37a' }, { k: '租金', v: 18, c: '#8a5a3c' },
+  { k: '平台与营销', v: 12, c: '#d7c2a0' }, { k: '包装', v: 6, c: '#a3b18a' }, { k: '水电杂费', v: 4, c: '#7f8c8d' }, { k: '利润', v: 10, c: '#d6322e' },
+];
+const BODY = '走进任何一条商业街，奶茶店几乎是密度最高的门店之一。一杯二十元的饮品，看起来毛利可观，但把账本摊开，真正留在店主口袋里的部分远比想象中薄。原料只是开始：茶叶、鲜奶、水果和小料，占去近三成；人工与房租紧随其后，在核心商圈，后者甚至会更高。外卖平台的抽成与营销投放，又分走一块。包装、水电、损耗这些零碎开支，单看不起眼，加起来也不少。最后剩下的，才是利润。';
+let PAPER;
+function makePaper() { const c = document.createElement('canvas'), k = Reel.RS; c.width = 1920 * k | 0; c.height = 1080 * k | 0; const x = c.getContext('2d', { willReadFrequently: true }); x.scale(k, k);
+  x.fillStyle = '#f4efe6'; x.fillRect(0, 0, 1920, 1080); const r = rng(6);
+  for (let i = 0; i < 14000; i++) { x.fillStyle = `rgba(${r() < 0.6 ? '120,105,80' : '255,255,255'},${0.025 + r() * 0.04})`; x.fillRect(r() * 1920, r() * 1080, 1.2, 1.2); }
+  const gr = x.createLinearGradient(900, 0, 1020, 0); gr.addColorStop(0, 'rgba(0,0,0,0)'); gr.addColorStop(0.5, 'rgba(70,50,30,.12)'); gr.addColorStop(1, 'rgba(0,0,0,0)'); x.fillStyle = gr; x.fillRect(900, 0, 120, 1080);
+  return c; }
+function wrap(text, x, y, w, lh, font, col, maxChars) {
+  g.font = font; g.fillStyle = col; g.textAlign = 'left'; let line = '', yy = y, n = 0;
+  for (const ch of text.slice(0, maxChars)) { if (g.measureText(line + ch).width > w) { g.fillText(line, x, yy); yy += lh; line = ''; } line += ch; n++; }
+  if (line) g.fillText(line, x, yy); return yy;
+}
+function cup(t, cx, top, w, h) {
+  // cup geometry: slightly tapered
+  const bw = w * 0.82; const yb = top + h;
+  const xl = (y) => cx - lerp(bw / 2, w / 2, (yb - y) / h), xr = (y) => cx + lerp(bw / 2, w / 2, (yb - y) / h);
+  // pour layers
+  let acc = 0; const labels = [];
+  LAYERS.forEach((L, i) => { const t0 = 1.6 + i * 0.42; const p = E.outCubic(clamp((t - t0) / 0.5)); if (p <= 0) { return; }
+    const h0 = acc / 100 * h * 0.92, h1 = (acc + L.v * p) / 100 * h * 0.92; const y0 = yb - h0, y1 = yb - h1;
+    g.fillStyle = L.c; g.beginPath(); g.moveTo(xl(y0), y0); g.lineTo(xr(y0), y0);
+    const wave = (1 - p) * 8; g.lineTo(xr(y1), y1); for (let k = 0; k <= 20; k++) { const xx = lerp(xr(y1), xl(y1), k / 20); g.lineTo(xx, y1 + Math.sin(k * 0.9 + t * 9) * wave); } g.closePath(); g.fill();
+    labels.push({ L, y: (y0 + y1) / 2, p, i, yTop: y1 }); acc += L.v * p; });
+  // tapioca pearls at the bottom
+  for (let i = 0; i < 26; i++) { const px = cx - bw / 2 + 24 + hash(i) * (bw - 48), py = yb - 16 - hash(i + 3) * 40; g.fillStyle = '#2b1a12'; g.beginPath(); g.arc(px, py, 11, 0, 6.3); g.fill(); g.fillStyle = 'rgba(255,255,255,.25)'; g.beginPath(); g.arc(px - 3, py - 4, 3, 0, 6.3); g.fill(); }
+  // glass outline (ink drawing)
+  g.strokeStyle = '#141414'; g.lineWidth = 3.5; g.beginPath(); g.moveTo(cx - w / 2 - 6, top); g.lineTo(cx - bw / 2, yb); g.quadraticCurveTo(cx, yb + 14, cx + bw / 2, yb); g.lineTo(cx + w / 2 + 6, top); g.stroke();
+  g.lineWidth = 3; g.beginPath(); g.ellipse(cx, top, w / 2 + 6, 14, 0, 0, 6.3); g.stroke();
+  g.strokeStyle = '#141414'; g.lineWidth = 12; g.lineCap = 'round'; g.beginPath(); g.moveTo(cx + 40, top + 40); g.lineTo(cx + 90, top - 170); g.stroke(); g.strokeStyle = '#d6322e'; g.lineWidth = 8; g.beginPath(); g.moveTo(cx + 40, top + 40); g.lineTo(cx + 90, top - 170); g.stroke();
+  // leader lines + labels (alternate sides)
+  labels.forEach(({ L, y, p, i }) => { const right = i % 2 === 0; const lx = right ? xr(y) + 8 : xl(y) - 8; const tx = right ? cx + w / 2 + 120 : cx - w / 2 - 120; const ly = y + (i === 6 ? -20 : i === 5 ? -26 : i === 3 ? 6 : 0);
+    g.strokeStyle = '#141414'; g.lineWidth = 1.5; g.beginPath(); g.moveTo(lx, y); g.lineTo(lerp(lx, tx, E.outCubic(p)), ly); g.stroke(); g.fillStyle = '#141414'; g.beginPath(); g.arc(lx, y, 4, 0, 6.3); g.fill();
+    if (p > 0.6) { const a = (p - 0.6) / 0.4; g.globalAlpha = a; g.textAlign = right ? 'left' : 'right'; g.font = '800 44px "Inter Display"'; g.fillStyle = L.k === '利润' ? '#d6322e' : '#141414';
+      g.fillText(Math.round(L.v * clamp((p - 0.3) / 0.7)) + '%', tx + (right ? 12 : -12), ly + 6); g.font = '500 22px "Noto Serif CJK SC"'; g.fillStyle = '#4a463e'; g.fillText(L.k + ' · ¥' + (L.v / 5).toFixed(1), tx + (right ? 12 : -12), ly + 36); g.globalAlpha = 1; } });
+}
+Reel.scene({
+  duration: 10, fps: 30,
+  fonts: ['900 96px "Noto Serif CJK SC"', '500 22px "Noto Serif CJK SC"', '400 21px "Noto Serif CJK SC"', '800 44px "Inter Display"', '700 16px Inter', '700 18px "Noto Sans CJK SC"'],
+  async setup() { PAPER = makePaper(); },
+  cues: [{ t: 0.1, sfx: 'paper', gain: 0.6 }, { t: 0.6, sfx: 'type', gain: 0.5 }, ...LAYERS.map((L, i) => ({ t: 1.6 + i * 0.42, sfx: i === 6 ? 'ding' : 'drip', gain: 0.5 })),
+    { t: 5.0, sfx: 'marker', gain: 0.9 }, { t: 5.15, sfx: 'impact_soft', gain: 0.5 }, { t: 5.6, sfx: 'pop', gain: 0.7 }, { t: 7.2, sfx: 'whoosh', gain: 0.4 }, { t: 8.4, sfx: 'stamp', gain: 0.6 }],
+  render(t) {
+    const OPEN_T0 = 0.8; if (t < 2) t = OPEN_T0 + (2 - OPEN_T0) * t / 2; // no blank opening: frame 0 starts mid-intro
+
+    cv.begin();
+    // reading camera: headline close-up -> down to the cup -> pull back to the full spread
+    const k1 = E.inOutCubic(inv(0.9, 2.2, t)), k2 = E.inOutCubic(inv(5.6, 6.6, t));
+    let z = lerp(1.45, 1.25, k1); z = lerp(z, 1.0, k2);
+    let fx = lerp(560, 1380, k1); fx = lerp(fx, 960, k2);
+    let fy = lerp(300, 560, k1); fy = lerp(fy, 540, k2);
+    fx += Math.sin(t * 0.7) * 6; fy += Math.cos(t * 0.5) * 4;
+    fx = clamp(fx, 960 / z, 1920 - 960 / z); fy = clamp(fy, 540 / z, 1080 - 540 / z);
+    g.save(); g.translate(960, 540); g.scale(z, z); g.translate(-fx, -fy);
+    g.drawImage(PAPER, 0, 0, 1920, 1080);
+    // masthead rule & folio
+    g.fillStyle = '#141414'; g.fillRect(120, 90, 1680, 3); g.fillRect(120, 97, 1680, 1);
+    g.font = '700 16px Inter'; g.letterSpacing = '6px'; g.fillStyle = '#141414'; g.fillText('THE XIAOXIONG REVIEW', 120, 76); g.textAlign = 'right'; g.fillText('2026 · 10 · No.17', 1800, 76); g.letterSpacing = '0px'; g.textAlign = 'left';
+    // left page: kicker, headline, deck, byline, columns
+    const ta = E.outCubic(inv(0.1, 0.6, t));
+    g.globalAlpha = ta; g.font = '700 18px "Noto Sans CJK SC"'; g.fillStyle = '#d6322e'; g.fillText(C.kicker, 120, 150);
+    g.font = '900 96px "Noto Serif CJK SC"'; g.fillStyle = '#141414'; g.fillText(C.head, 116, 262); g.fillText(C.head2, 116, 372);
+    g.font = '500 26px "Noto Serif CJK SC"'; g.fillStyle = '#3a362f'; g.fillText(C.deck, 120, 432);
+    g.font = '400 16px "Noto Sans CJK SC"'; g.fillStyle = '#7a7466'; g.fillText(C.by, 120, 472); g.fillRect(120, 492, 760, 1);
+    g.globalAlpha = 1;
+    // body text types on
+    const n = Math.floor(clamp((t - 0.5) / 2.0) * BODY.length);
+    const half = Math.ceil(BODY.length / 2);
+    const colA = BODY.slice(1, half), colB = BODY.slice(half);
+    if (n > 0) { g.save(); g.font = '900 72px "Noto Serif CJK SC"'; g.fillStyle = '#d6322e'; g.fillText(BODY[0], 116, 600); g.restore(); }
+    // column A wraps around the drop cap
+    g.font = '400 21px "Noto Serif CJK SC"'; g.fillStyle = '#2a2721';
+    { let line = '', y = 548, cnt = 0, lines = 0; const maxN = Math.max(0, n - 1);
+      for (const ch of colA) { if (cnt >= maxN) break; const w = lines < 3 ? 280 : 360; const x0 = lines < 3 ? 200 : 120; if (g.measureText(line + ch).width > w) { g.fillText(line, x0, y); y += 36; line = ''; lines++; } line += ch; cnt++; }
+      if (line) g.fillText(line, lines < 3 ? 200 : 120, y); }
+    { let line = '', y = 548, cnt = 0; const maxN = Math.max(0, n - half);
+      for (const ch of colB) { if (cnt >= maxN) break; if (g.measureText(line + ch).width > 360) { g.fillText(line, 520, y); y += 36; line = ''; } line += ch; cnt++; } if (line) g.fillText(line, 520, y); }
+    // pull quote
+    const pq = E.outCubic(inv(7.4, 8.2, t)); if (pq > 0) { g.globalAlpha = pq; g.fillStyle = '#d6322e'; g.fillRect(120, 900, 6, 92); g.font = '700 30px "Noto Serif CJK SC"'; g.fillStyle = '#141414'; g.fillText('“二十块里，只有两块', 146, 936); g.fillText('　真正留了下来。”', 146, 980); g.globalAlpha = 1; }
+    // right page: the cup chart
+    g.font = '700 16px Inter'; g.letterSpacing = '5px'; g.fillStyle = '#7a7466'; g.fillText('FIG.1　一杯奶茶的成本结构（¥20）', 1060, 150); g.letterSpacing = '0px';
+    cup(t, 1400, 330, 330, 560);
+    // hook: highlighter on profit + callout
+    const hl = E.inOutCubic(inv(5.0, 5.4, t));
+    if (hl > 0) { const right = true; g.save(); g.globalCompositeOperation = 'multiply'; g.fillStyle = 'rgba(255,228,70,.85)'; g.beginPath(); g.moveTo(1690, 330 + 560 - 0.96 * 560 + 40); g.lineTo(1690 + 230 * hl, 330 + 560 - 0.96 * 560 + 34); g.lineTo(1690 + 230 * hl, 330 + 560 - 0.96 * 560 + 70); g.lineTo(1690, 330 + 560 - 0.96 * 560 + 76); g.fill(); g.restore(); }
+    const co = spring(t - 5.55, { k: 260, c: 14 });
+    if (t > 5.55) { g.save(); g.translate(1110, 300); g.scale(co, co); g.rotate(-0.04); g.fillStyle = '#d6322e'; g.beginPath(); g.roundRect(-150, -46, 300, 92, 10); g.fill(); g.fillStyle = '#fff'; g.font = '900 46px "Noto Serif CJK SC"'; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText('只剩 ¥2', 0, 4); g.restore();
+      g.strokeStyle = '#d6322e'; g.lineWidth = 3; g.setLineDash([8, 8]); g.beginPath(); g.moveTo(1260, 300); g.quadraticCurveTo(1500, 260, 1600, 330 + 560 - 0.96 * 560 + 30); g.stroke(); g.setLineDash([]); }
+    g.font = '400 15px "Noto Sans CJK SC"'; g.fillStyle = '#8a8577'; g.fillText(C.note, 1060, 1010);
+    g.restore();
+    const vg = g.createRadialGradient(960, 540, 600, 960, 540, 1200); vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(60,45,25,.18)'); g.fillStyle = vg; g.fillRect(0, 0, 1920, 1080);
+  },
+});
+</script></body></html>

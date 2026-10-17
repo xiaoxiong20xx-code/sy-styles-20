@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>15 综艺花字 · Buzzer Beater</title>
+<script src="../../lib/core.js"></script>
+</head><body><div id="stage"></div>
+<script>
+/* ===== 15 综艺花字 · 压哨三分 =====
+   A gym, a long three. Variety-show captions do the storytelling: triple-stroke type that pops on the beat,
+   onomatopoeia riding the ball's arc, a slow-motion push-in on the rim, then SWISH — flash, shake, starburst,
+   confetti, emoji stickers, and the score flips. */
+const { E, clamp, inv, lerp, spring, hash, rng } = Reel;
+const stage = Reel.makeStage('#1a1410');
+const C = Reel.cfg({ c1: '全场注意！', c2: '他要出手了…', c3: '嗖——', c4: '唰！', c4b: '空心入网', c5: '这球能吹一年', sb: ['主队', '客队'], sign: 'XIAOXIONG TV' });
+const cv = Reel.canvas2d(stage); const g = cv.ctx;
+let BG;
+const HOOP = { x: 1450, y: 430 };
+function makeGym() {
+  const c = document.createElement('canvas'), k = Reel.RS; c.width = 2400 * k | 0; c.height = 1400 * k | 0;
+  const x = c.getContext('2d', { willReadFrequently: true }); x.scale(k, k); x.translate(240, 160);
+  // wall + bleachers with a crowd (blurred, warm)
+  const wall = x.createLinearGradient(0, -160, 0, 640); wall.addColorStop(0, '#0f1a33'); wall.addColorStop(1, '#22304f'); x.fillStyle = wall; x.fillRect(-240, -160, 2400, 820);
+  { const cc = document.createElement('canvas'); cc.width = 2400; cc.height = 600; const y = cc.getContext('2d'); const r = rng(3);
+    for (let row = 0; row < 8; row++) for (let i = 0; i < 68; i++) { const px = i * 36 + (row % 2) * 18 + r() * 8, py = 30 + row * 66; const col = ['#e0b08a', '#c88a64', '#8a5a3a', '#f0d0b0'][(r() * 4) | 0];
+      y.fillStyle = ['#d9483b', '#f2c14e', '#2f6fd6', '#eeeeee', '#1d1d1d', '#3aa36a'][(r() * 6) | 0]; y.fillRect(px - 13, py + 10, 26, 44); y.fillStyle = col; y.beginPath(); y.arc(px, py, 12, 0, 6.3); y.fill(); }
+    x.save(); x.filter = `blur(${9 * k}px)`; x.drawImage(cc, -240, 90, 2400, 600); x.restore(); }
+  x.fillStyle = 'rgba(10,15,35,.35)'; x.fillRect(-240, -160, 2400, 820);
+  // banners & lights
+  for (let i = 0; i < 6; i++) { x.fillStyle = ['#d9483b', '#f2c14e', '#2f6fd6'][i % 3]; x.fillRect(80 + i * 330, -40, 150, 70); x.fillStyle = '#fff'; x.font = '900 34px "Noto Sans CJK SC"'; x.textAlign = 'center'; x.fillText(['加油', 'MVP', '冠军'][i % 3], 155 + i * 330, 8); }
+  // floor (wood planks with perspective + glossy reflection band)
+  const fy = 640; const fl = x.createLinearGradient(0, fy, 0, 1240); fl.addColorStop(0, '#b97a42'); fl.addColorStop(1, '#e0a668'); x.fillStyle = fl; x.fillRect(-240, fy, 2400, 600);
+  x.strokeStyle = 'rgba(90,50,20,.25)'; x.lineWidth = 2; for (let i = -40; i < 60; i++) { x.beginPath(); x.moveTo(960 + i * 30, fy); x.lineTo(960 + i * 140, 1240); x.stroke(); }
+  for (let j = 0; j < 14; j++) { const y = fy + Math.pow(j / 14, 1.8) * 600; x.strokeStyle = 'rgba(90,50,20,.12)'; x.beginPath(); x.moveTo(-240, y); x.lineTo(2160, y); x.stroke(); }
+  const gl = x.createLinearGradient(0, fy, 0, fy + 200); gl.addColorStop(0, 'rgba(255,240,210,.35)'); gl.addColorStop(1, 'rgba(255,240,210,0)'); x.fillStyle = gl; x.fillRect(-240, fy, 2400, 200);
+  // court paint
+  x.fillStyle = 'rgba(32,82,190,.82)'; x.beginPath(); x.moveTo(1300, fy + 10); x.lineTo(1700, fy + 10); x.lineTo(1900, 1240); x.lineTo(1150, 1240); x.fill();
+  x.strokeStyle = 'rgba(255,255,255,.85)'; x.lineWidth = 6; x.beginPath(); x.ellipse(1500, fy + 140, 700, 150, 0, Math.PI * 0.55, Math.PI * 1.02); x.stroke();
+  return c;
+}
+function ball(xx, yy, R, rot) {
+  g.save(); g.translate(xx, yy);
+  const gr = g.createRadialGradient(-R * 0.35, -R * 0.4, R * 0.1, 0, 0, R); gr.addColorStop(0, '#ffb066'); gr.addColorStop(0.6, '#e2661e'); gr.addColorStop(1, '#8a3410');
+  g.fillStyle = gr; g.beginPath(); g.arc(0, 0, R, 0, 6.3); g.fill();
+  g.save(); g.beginPath(); g.arc(0, 0, R, 0, 6.3); g.clip(); g.rotate(rot); g.strokeStyle = 'rgba(30,12,4,.85)'; g.lineWidth = R * 0.07;
+  g.beginPath(); g.moveTo(-R, 0); g.lineTo(R, 0); g.stroke(); g.beginPath(); g.moveTo(0, -R); g.lineTo(0, R); g.stroke();
+  g.beginPath(); g.ellipse(-R * 0.95, 0, R * 0.55, R * 1.05, 0, -1.4, 1.4); g.stroke(); g.beginPath(); g.ellipse(R * 0.95, 0, R * 0.55, R * 1.05, 0, Math.PI - 1.4, Math.PI + 1.4); g.stroke(); g.restore();
+  g.restore();
+}
+function hoopBack(t) { // backboard + back half of rim
+  const { x, y } = HOOP;
+  g.fillStyle = 'rgba(230,240,255,.25)'; g.strokeStyle = '#f4f6fa'; g.lineWidth = 8; g.beginPath(); g.roundRect(x - 40, y - 210, 300, 190, 8); g.fill(); g.stroke();
+  g.strokeStyle = '#e8483a'; g.lineWidth = 6; g.strokeRect(x + 50, y - 120, 110, 82);
+  g.fillStyle = '#666'; g.fillRect(x + 200, y - 30, 30, 500);
+  g.strokeStyle = '#e8481a'; g.lineWidth = 9; g.beginPath(); g.ellipse(x, y, 74, 17, 0, Math.PI, Math.PI * 2); g.stroke();
+}
+function hoopFront(t, swish) {
+  const { x, y } = HOOP;
+  // net: strings that flare and whip when the ball goes through
+  g.strokeStyle = 'rgba(255,255,255,.92)'; g.lineWidth = 3;
+  const kick = swish > 0 ? Math.exp(-swish * 4) * Math.sin(swish * 22) : 0, push = swish > 0 && swish < 0.35 ? Math.sin(swish / 0.35 * Math.PI) : 0;
+  const N = 10;
+  const pt = (i, j) => { const a = Math.PI * (i / N); const rr = lerp(72, 38 + push * 22, j / 4); const yy = y + j * 26 + push * j * 6 + kick * j * 3; return [x - Math.cos(a) * rr + kick * (j * 2) * Math.sin(i), yy + Math.sin(a) * 14 * (1 - j / 5)]; };
+  for (let i = 0; i <= N; i++) { g.beginPath(); for (let j = 0; j <= 4; j++) { const [px, py] = pt(i, j); j ? g.lineTo(px, py) : g.moveTo(px, py); } g.stroke(); }
+  for (let j = 1; j <= 4; j++) { g.beginPath(); for (let i = 0; i <= N; i++) { const [px, py] = pt(i, j); i ? g.lineTo(px, py) : g.moveTo(px, py); } g.stroke(); }
+  g.strokeStyle = '#ff5a1f'; g.lineWidth = 9; g.beginPath(); g.ellipse(x, y, 74, 17, 0, 0, Math.PI); g.stroke();
+}
+// variety caption: triple stroke + shadow + pop
+function caption(text, x, y, size, o = {}) {
+  const t0 = o.t0, t = o.t; if (t < t0) return; const p = spring(t - t0, { k: o.k || 380, c: o.c || 13 });
+  const out = o.out ? 1 - E.inCubic(inv(o.out, o.out + 0.25, t)) : 1; if (out <= 0) return;
+  g.save(); g.translate(x, y); g.rotate(o.rot || 0); g.scale(p * out, p * out); g.globalAlpha = Math.min(1, p * 2);
+  g.font = `900 ${size}px "Noto Sans CJK SC"`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.lineJoin = 'round';
+  const chars = [...text]; const w = g.measureText(text).width; let cx = -w / 2;
+  chars.forEach((ch, i) => { const cw = g.measureText(ch).width; const bob = (o.wave ? Math.sin(t * 10 + i * 0.8) * size * 0.05 : 0) + (1 - spring(t - t0 - i * 0.04, { k: 500, c: 16 })) * size * 0.6;
+    const X = cx + cw / 2, Y = bob;
+    g.lineWidth = size * 0.34; g.strokeStyle = o.c3 || '#1b1b1b'; g.strokeText(ch, X + size * 0.05, Y + size * 0.07);
+    g.lineWidth = size * 0.26; g.strokeStyle = o.c3 || '#1b1b1b'; g.strokeText(ch, X, Y);
+    g.lineWidth = size * 0.15; g.strokeStyle = o.c2 || '#ffffff'; g.strokeText(ch, X, Y);
+    const gr = g.createLinearGradient(0, Y - size / 2, 0, Y + size / 2); gr.addColorStop(0, o.f1 || '#fff36b'); gr.addColorStop(1, o.f2 || '#ff8a00'); g.fillStyle = gr; g.fillText(ch, X, Y);
+    g.fillStyle = 'rgba(255,255,255,.55)'; g.save(); g.beginPath(); g.rect(X - cw / 2, Y - size / 2, cw, size * 0.32); g.clip(); g.fillText(ch, X, Y); g.restore();
+    cx += cw; });
+  g.restore();
+}
+function emoji(e, x, y, size, t0, t, rot = 0, t1 = 99) { if (t < t0 || t > t1 + 0.25) return; const p = spring(t - t0, { k: 420, c: 12 }) * (1 - E.inCubic(inv(t1, t1 + 0.25, t))); g.save(); g.translate(x, y); g.rotate(rot + Math.sin(t * 6) * 0.08); g.scale(p, p); g.font = `${size}px "Noto Color Emoji"`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(e, 0, 0); g.restore(); }
+function burst(x, y, r, n, col, a) { g.save(); g.translate(x, y); g.globalAlpha = a; g.fillStyle = col; g.beginPath(); for (let i = 0; i <= n * 2; i++) { const an = i / (n * 2) * 6.283, rr = i % 2 ? r * 0.62 : r; g.lineTo(Math.cos(an) * rr, Math.sin(an) * rr); } g.fill(); g.restore(); }
+
+// ball flight: release 2.4 -> rim 4.5 (slow-mo near the rim)
+const REL = 2.4, SW = 4.5;
+function ballAt(t) {
+  if (t < REL) return { x: 230 + Math.sin(t * 9) * 4, y: 820 - Math.abs(Math.sin(t * 7)) * 120 * (t < 1.9 ? 1 : 0), r: 46, rot: t * 2 };
+  const u = clamp((t - REL) / (SW - REL)); const s = u < 0.7 ? u / 0.7 * 0.85 : 0.85 + (u - 0.7) / 0.3 * 0.15; // slow-mo at the end of the arc
+  const x = lerp(230, HOOP.x, s), y = lerp(820, HOOP.y - 20, s) - Math.sin(s * Math.PI) * 520;
+  if (t > SW) { const k = t - SW; return { x: HOOP.x + k * 30, y: HOOP.y - 20 + k * 500 + 0.5 * 2600 * k * k, r: 44, rot: t * 6 }; }
+  return { x, y, r: 46 - s * 4, rot: t * 6 };
+}
+Reel.scene({
+  duration: 10, fps: 30,
+  fonts: ['900 120px "Noto Sans CJK SC"', '120px "Noto Color Emoji"', '800 60px "Inter Display"', '700 20px Inter'],
+  async setup() { BG = makeGym(); },
+  cues: [{ t: 0.3, sfx: 'boing', gain: 0.8 }, { t: 0.45, sfx: 'pop', gain: 0.6 }, { t: 0.9, sfx: 'tick', gain: 0.4 }, { t: 1.6, sfx: 'pop', gain: 0.7 }, { t: 2.0, sfx: 'boing2', gain: 0.6 },
+    { t: 2.4, sfx: 'whoosh_up', gain: 0.8 }, { t: 2.9, sfx: 'swell', gain: 0.6 }, { t: 3.4, sfx: 'whoosh', gain: 0.5 }, { t: 4.5, sfx: 'impact', gain: 1.0 }, { t: 4.52, sfx: 'clap', gain: 0.9 },
+    { t: 4.6, sfx: 'fireworks', gain: 0.7 }, { t: 5.0, sfx: 'clap', gain: 0.8 }, { t: 5.5, sfx: 'clap', gain: 0.7 }, { t: 6.6, sfx: 'laugh', gain: 0.8 }, { t: 7.6, sfx: 'coin', gain: 0.8 }, { t: 8.0, sfx: 'ding', gain: 0.7 }],
+  render(t) {
+    cv.begin();
+    const b = ballAt(t);
+    // camera: wide -> follow ball -> push on rim (slow-mo) -> punch -> settle
+    const fol = E.inOutCubic(inv(2.4, 3.6, t)), push = E.inOutCubic(inv(3.4, 4.4, t)), back = E.inOutCubic(inv(5.6, 6.6, t));
+    let z = lerp(1.0, 1.15, fol); z = lerp(z, 1.75, push); z = lerp(z, 1.08, back);
+    let fx = lerp(960, b.x * 0.6 + 960 * 0.4, fol); fx = lerp(fx, HOOP.x, push); fx = lerp(fx, 1100, back);
+    let fy = lerp(560, 480, fol); fy = lerp(fy, HOOP.y + 40, push); fy = lerp(fy, 520, back);
+    const sh = t > SW && t < SW + 0.5 ? (1 - (t - SW) / 0.5) * 16 : 0;
+    const punch = 1 + 0.08 * Math.exp(-Math.pow((t - SW - 0.04) / 0.12, 2));
+    g.save(); g.translate(960 + Math.sin(t * 90) * sh, 540 + Math.cos(t * 77) * sh); g.scale(z * punch, z * punch); g.translate(-fx, -fy);
+    g.drawImage(BG, -240, -160, 2400, 1400);
+    // ball shadow on floor
+    g.fillStyle = 'rgba(40,20,5,.3)'; g.beginPath(); g.ellipse(b.x, 820 + 46, 46 * (1 - clamp((820 - b.y) / 900)) + 10, 10, 0, 0, 6.3); g.fill();
+    hoopBack(t);
+    const throughRim = t > SW - 0.05;
+    if (throughRim) { ball(b.x, b.y, b.r, b.rot); hoopFront(t, t - SW); }
+    else { hoopFront(t, -1); ball(b.x, b.y, b.r, b.rot); }
+    // motion trail during the shot
+    if (t > REL && t < SW) for (let k = 1; k < 7; k++) { const p = ballAt(t - k * 0.03); g.globalAlpha = 0.18 * (1 - k / 7); ball(p.x, p.y, p.r, p.rot); } g.globalAlpha = 1;
+    g.restore();
+    // flash
+    const fl = Math.exp(-Math.pow((t - SW) / 0.06, 2)); if (fl > 0.01) { g.fillStyle = `rgba(255,255,240,${fl * 0.85})`; g.fillRect(0, 0, 1920, 1080); }
+    // speed lines in slow-mo
+    const sl = inv(3.6, 4.0, t) * (1 - inv(4.5, 4.7, t)); if (sl > 0) for (let i = 0; i < 40; i++) { const a = hash(i) * 6.283, r0 = 520 + hash(i + 2) * 300; g.strokeStyle = `rgba(255,255,255,${0.5 * sl})`; g.lineWidth = 3 + hash(i) * 4; g.beginPath(); g.moveTo(960 + Math.cos(a) * r0, 540 + Math.sin(a) * r0); g.lineTo(960 + Math.cos(a) * (r0 + 300), 540 + Math.sin(a) * (r0 + 300)); g.stroke(); }
+    // captions
+    caption(C.c1, 560, 200, 110, { t0: 0.3, t, rot: -0.06, out: 2.2 });
+    emoji('📢', 1010, 170, 110, 0.45, t, 0.2, 2.2); if (t > 2.2) {}
+    caption(C.c2, 600, 940, 84, { t0: 1.6, t, rot: 0.03, f1: '#ffffff', f2: '#bfe8ff', c2: '#2f6fd6', out: 3.3, wave: true });
+    emoji('😰', 1060, 920, 100, 2.0, t, 0, 3.3);
+    if (t > 2.6 && t < 4.4) { const p = ballAt(t); caption(C.c3, 760, 720, 96, { t0: 2.6, t, rot: -0.12, f1: '#ffffff', f2: '#d6f2ff', c2: '#7bc5ff', out: 4.2 }); }
+    if (t > SW) { const a = 1 - inv(7.4, 7.7, t);
+      burst(960, 470, 420 * spring(t - SW, { k: 300, c: 12 }), 14, '#ffd21e', 0.95 * a); burst(960, 470, 330 * spring(t - SW - 0.05, { k: 300, c: 12 }), 14, '#ff3d6e', 0.95 * a);
+      caption(C.c4, 960, 420, 230, { t0: SW, t, rot: -0.05, k: 520, out: 7.4 });
+      caption(C.c4b, 960, 640, 110, { t0: SW + 0.25, t, rot: 0.03, f1: '#ffffff', f2: '#ffe0f0', c2: '#ff3d6e', out: 7.4 });
+      emoji('🔥', 520, 380, 150, SW + 0.15, t, -0.3, 7.4); emoji('🎉', 1430, 330, 150, SW + 0.3, t, 0.25, 7.4); emoji('👏', 1500, 700, 120, SW + 0.45, t, 0.1, 7.4);
+      for (let i = 0; i < 90; i++) { const u = t - SW; if (u > 3) break; const x0 = hash(i) * 1920, sp = 200 + hash(i + 3) * 400; const yy = -40 + u * sp + 0.5 * 300 * u * u - hash(i + 5) * 300; const sw = Math.sin(u * 6 + i) * 30;
+        g.save(); g.translate(x0 + sw, yy); g.rotate(u * 8 + i); g.fillStyle = ['#ffd21e', '#ff3d6e', '#2fd0ff', '#ffffff', '#7cff6b'][i % 5]; g.fillRect(-9, -5, 18, 10); g.restore(); } }
+    caption(C.c5, 960, 860, 96, { t0: 6.5, t, rot: -0.03, f1: '#ffffff', f2: '#fff0a0', c2: '#ff8a00', wave: true });
+    emoji('😂', 1420, 830, 120, 6.7, t, 0.2);
+    // scoreboard
+    const sa = E.outCubic(inv(0.1, 0.5, t));
+    g.save(); g.globalAlpha = sa; g.translate(1560, 60); g.fillStyle = 'rgba(15,20,40,.85)'; g.beginPath(); g.roundRect(0, 0, 300, 96, 14); g.fill();
+    g.font = '700 20px "Noto Sans CJK SC"'; g.fillStyle = '#c8d0e0'; g.textAlign = 'center'; g.fillText(C.sb[0], 70, 32); g.fillText(C.sb[1], 230, 32);
+    const flip = spring(t - 7.6, { k: 300, c: 13 }); g.font = '800 46px "Inter Display"'; g.fillStyle = '#fff'; g.fillText('86', 230, 80);
+    g.save(); g.translate(70, 64); g.scale(1, t > 7.6 ? Math.abs(Math.cos(Math.min(1, flip) * Math.PI)) : 1); g.fillStyle = t > 7.6 + 0.08 ? '#ffd21e' : '#fff'; g.fillText(t > 7.68 ? '87' : '84', 0, 16); g.restore();
+    g.fillStyle = '#ff3d6e'; g.font = '700 16px Inter'; g.fillText('0:00.4', 150, 80); g.restore();
+    if (t > 7.6) caption('+3', 1710, 225, 90, { t0: 7.6, t, rot: 0.1 });
+    if (t > 6.5) { caption('压哨绝杀', 960, 560, 150, { t0: 6.5, t, rot: -0.1 }); const ea = clamp((t - 6.75) / 0.2); g.save(); g.globalAlpha = ea; g.font = '900 40px "Inter Display"'; g.textAlign = 'center'; g.letterSpacing = '14px'; g.lineWidth = 10; g.strokeStyle = '#1a1410'; g.strokeText('BUZZER BEATER', 960, 690); g.fillStyle = '#ffd21e'; g.fillText('BUZZER BEATER', 960, 690); g.restore(); }
+    g.font = '700 20px Inter'; g.fillStyle = 'rgba(255,255,255,.6)'; g.textAlign = 'left'; g.letterSpacing = '6px'; g.fillText(C.sign + '  ·  LIVE', 60, 1040);
+  },
+});
+</script></body></html>

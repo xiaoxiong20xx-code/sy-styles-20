@@ -1,0 +1,15 @@
+{
+  "name": "sy-styles-20-vol2",
+  "version": "2.0.0",
+  "description": "20 种商用级视频风格，每一帧都由代码算出来：Canvas / WebGL / 光线步进 + 逐帧渲染 + 程序化音效",
+  "author": "肖雄 XIAOXIONG",
+  "license": "MIT",
+  "scripts": {
+    "setup": "npx playwright install chromium",
+    "list": "node make.js list",
+    "reel": "node make.js reel all"
+  },
+  "dependencies": {
+    "playwright": "^1.48.0"
+  }
+}

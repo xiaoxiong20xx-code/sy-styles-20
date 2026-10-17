@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>05 3D 渲染 · Amber No.5</title>
+<script src="../../lib/core.js"></script><script src="../../lib/gl.js"></script><script src="../../lib/rm.js"></script>
+<style>
+  #cap{position:absolute;left:1120px;top:380px;color:#f3e2c4;font-family:'Noto Serif CJK SC'}
+  #cap .a{font-weight:900;font-size:120px;letter-spacing:.08em;line-height:1}
+  #cap .b{font:300 26px Inter;letter-spacing:.62em;margin-top:30px;color:rgba(243,226,196,.7)}
+  #cap .c{width:0;height:1px;background:rgba(243,226,196,.5);margin-top:34px}
+  #cap .d{font-weight:500;font-size:28px;letter-spacing:.3em;margin-top:30px;color:rgba(243,226,196,.75)}
+  .mk{overflow:hidden}
+</style>
+</head><body><div id="stage"></div>
+<script>
+/* ===== 05 3D 渲染 · 琥珀香水 =====
+   A dark product studio. A sliding strip light draws the silhouette of an amber perfume flacon out of the black;
+   the gold cap descends, spinning, and seats with a click (the hook): flare, the liquid shivers.
+   Raymarched glass with real refraction through the walls, amber absorption by path length, a gold cap,
+   a black lacquer floor that mirrors the bottle and catches its amber caustic, and depth of field. */
+const { E, clamp, inv, lerp } = Reel;
+const stage = Reel.makeStage('#060404');
+Reel.ownJitter = true;
+const C = Reel.cfg({ a: '琥珀 No.5', b: 'AMBER · EAU DE PARFUM', d: '光，被装进了瓶子里' });
+
+const rm = Reel.RM(stage, {
+  bloom: 0.45, th: 1.4, expo: 1.05, vig: 0.5, grain: 0.03, ca: 0.6, contrast: 1.1, sat: 1.05, bands: 8,
+  uniforms: `uniform vec3 uRo, uTa; uniform float uYaw, uCapY, uCapYaw, uFlare, uWave, uSweep, uFade, uShift, uTop;`,
+  scene: `
+const vec3 BODY = vec3(.62,.78,.27);
+float sdBody(vec3 p){
+  p = rotY(uYaw) * p;
+  float b = sdRoundBox(p - vec3(0.,.8,0.), BODY, .11);
+  float nk = sdCylinder(p - vec3(0.,1.66,0.), .1, .13);
+  return smin(b, nk, .04);
+}
+float sdCap(vec3 p){
+  p = rotY(uYaw + uCapYaw) * (p - vec3(0., 1.98 + uCapY, 0.));
+  float c = sdRoundBox(p, vec3(.27,.22,.21), .025);
+  c = max(c, -(abs(p.y) - .19) + 0.0 * p.x);                     // facet groove (thin bevel band)
+  c = min(c, sdRoundBox(p, vec3(.25,.215,.19), .03));
+  return c;
+}
+vec2 map(vec3 p){ float a = sdBody(p), b = sdCap(p); return a < b ? vec2(a, 1.) : vec2(b, 2.); }
+vec3 nrm(vec3 p){ const vec2 k = vec2(1.,-1.)*.0006;
+  return normalize(k.xyy*map(p+k.xyy).x + k.yyx*map(p+k.yyx).x + k.yxy*map(p+k.yxy).x + k.xxx*map(p+k.xxx).x); }
+vec3 nB(vec3 p){ const vec2 k = vec2(1.,-1.)*.0006;
+  return normalize(k.xyy*sdBody(p+k.xyy) + k.yyx*sdBody(p+k.yyx) + k.yxy*sdBody(p+k.yxy) + k.xxx*sdBody(p+k.xxx)); }
+vec2 box(vec3 ro, vec3 rd, vec3 bmin, vec3 bmax){
+  vec3 inv = 1. / rd; vec3 t0 = (bmin - ro) * inv, t1 = (bmax - ro) * inv;
+  vec3 tmin = min(t0, t1), tmax = max(t0, t1);
+  return vec2(max(max(tmin.x, tmin.y), tmin.z), min(min(tmax.x, tmax.y), tmax.z));
+}
+vec2 hitObj(vec3 ro, vec3 rd, int steps){
+  vec2 bb = box(ro, rd, vec3(-.95, -.01, -.95), vec3(.95, uTop, .95));
+  if (bb.x > bb.y || bb.y < 0.) return vec2(-1.);
+  float t = max(bb.x, 0.);
+  for (int i = 0; i < 90; i++){ if (i >= steps) break; vec2 h = map(ro + rd*t); if (h.x < .0006) return vec2(t, h.y); t += h.x; if (t > bb.y) break; }
+  return vec2(-1.);
+}
+// studio lighting as seen by reflections / refractions
+float band(float x, float c, float w, float s){ return smoothstep(w + s, w - s, abs(x - c)); }
+vec3 env(vec3 r){
+  float az = atan(r.x, -r.z);
+  vec3 c = vec3(.012,.009,.008) + vec3(.06,.035,.02) * smoothstep(-.1, .6, r.y) * .5;
+  // sweeping vertical strip (key) — moves across the set
+  c += vec3(1.,.93,.82) * 16. * band(az, uSweep, .06, .03) * band(r.y, .25, .45, .1);
+  // fixed thin strip, camera right
+  c += vec3(.9,.92,1.) * 3. * band(az, -1.15, .025, .015) * band(r.y, .2, .5, .1);
+  // warm backlight behind the bottle
+  c += vec3(1.,.62,.3) * 2.6 * smoothstep(.75, .98, dot(r, normalize(vec3(.15,.35,1.))));
+  // top softbox
+  c += vec3(1.,.95,.88) * .35 * smoothstep(.86, .95, r.y);
+  c += vec3(1.,.9,.8) * 4. * band(az, 2.75, .05, .03) * band(r.y, .1, .5, .1);
+  return c;
+}
+vec3 backdrop(vec3 rd){
+  vec3 c = vec3(.011,.008,.007);
+  vec2 q = vec2(rd.x / .32, (rd.y - .08) / .22);
+  c += vec3(.2,.11,.05) * exp(-dot(q, q)) * .8;
+  return c;
+}
+vec3 goldShade(vec3 p, vec3 rd){
+  vec3 n = nrm(p); vec3 r = reflect(rd, n);
+  vec3 F0 = vec3(1.,.74,.36); float ct = max(dot(n, -rd), 0.);
+  vec3 F = F0 + (1. - F0) * pow(1. - ct, 5.);
+  return env(r) * F * .8 + vec3(.04,.025,.01);
+}
+float gLiq = 0.;
+vec3 floorBase(vec3 p, vec3 rd){
+  vec2 xz = p.xz;
+  vec3 c = vec3(.01,.008,.007);
+  c += vec3(.16,.11,.08) * exp(-dot(xz, xz) * .35) * .6;
+  vec2 cq = (xz - vec2(-.35, .75)) * vec2(1.2, 2.2);
+  c += vec3(1.,.5,.12) * 1.4 * exp(-dot(cq, cq) * 1.6) * (.8 + .2 * sin(uTime * 3. + xz.x * 8.));
+  vec3 lq = rotY(uYaw) * vec3(p.x, 0., p.z);
+  float fp = sdRoundBox(vec3(lq.x, 0., lq.z), vec3(BODY.x, .1, BODY.z), .11);
+  c *= .25 + .75 * smoothstep(0., .45, fp);
+  float fade = smoothstep(7.5, 3.5, length(p - uRo));
+  return mix(backdrop(rd), c, fade);
+}
+vec3 glassShade(vec3 p, vec3 rd){
+  vec3 n = nB(p);
+  float ct = max(dot(n, -rd), 0.);
+  float F = schlick(ct, .045);
+  vec3 refl = env(reflect(rd, n));
+  // through the glass: march the inside to the exit wall
+  vec3 t1 = refract(rd, n, 1. / 1.5);
+  vec3 q = p - n * .003; float s = 0.;
+  for (int i = 0; i < 40; i++){ float d = -sdBody(q + t1 * s); if (d < .0008) break; s += max(d, .006); }
+  vec3 pe = q + t1 * s; vec3 ne = nB(pe);
+  vec3 t2 = refract(t1, -ne, 1.5); if (dot(t2, t2) < .01) t2 = reflect(t1, -ne);
+  // what the exit ray sees: floor or backdrop (+ studio lights)
+  vec3 bg = t2.y < -.02 ? floorBase(pe + t2 * (-pe.y / t2.y), t2) : backdrop(t2) + env(t2) * .55;
+  // amber liquid: absorption along the part of the path below the liquid line
+  vec3 lp = rotY(uYaw) * mix(p, pe, .5);
+  float level = 1.12 + uWave * sin(lp.x * 9. + uTime * 22.) * .9 + uWave * .6 * sin(lp.z * 14. - uTime * 17.);
+  float inLiq = smoothstep(level + .01, level - .01, lp.y) * step(abs(lp.x), BODY.x - .03);
+  vec3 absorb = mix(vec3(.1,.12,.16), vec3(.5, 2.3, 5.5), inLiq);
+  vec3 trans = bg * exp(-absorb * s * 1.6);
+  trans += vec3(1.,.42,.08) * inLiq * .16 * (.6 + .4 * smoothstep(0., 1.2, lp.y));     // light scattering in the juice
+  // meniscus line glints
+  trans += vec3(1.,.8,.5) * 1.4 * smoothstep(.012, 0., abs(lp.y - level)) * step(abs(lp.x), BODY.x - .04);
+  gLiq = inLiq;
+  vec3 col = mix(trans, refl, F) + refl * .06;
+  // edge darkening of thick glass walls (total internal reflection band)
+  col *= .55 + .45 * smoothstep(.05, .35, ct);
+  return col;
+}
+vec3 floorCol(vec3 p, vec3 rd){
+  vec3 c = floorBase(p, rd);
+  float fade = smoothstep(9., 4., length(p - uRo));
+  vec3 n = normalize(vec3(.006 * (vnoise(p * 60.) - .5), 1., .006 * (vnoise(p * 60. + 3.) - .5)));
+  vec3 r = reflect(rd, n);
+  float F = .06 + .55 * pow(1. - max(dot(n, -rd), 0.), 5.);
+  vec2 h = hitObj(p + n * .002, r, 50);
+  vec3 rc = backdrop(r) * .6;
+  if (h.x > 0.) { vec3 q = p + r * h.x; rc = h.y > 1.5 ? goldShade(q, r) : glassShade(q, r); F = max(F, .32) * smoothstep(1.2, 0., q.y * .5); }
+  return mix(c, rc, F * fade);
+}
+vec3 render(vec2 fc){
+  vec2 uv = (2. * fc - uRes) / uRes.y; uv.x += uShift;
+  vec3 ro = uRo, rd = camMat(ro, uTa, 0.) * normalize(vec3(uv, 2.5));
+  vec3 col; gDepth = 30.;
+  vec2 h = hitObj(ro, rd, 90);
+  if (h.x > 0.) { vec3 p = ro + rd * h.x; col = h.y > 1.5 ? goldShade(p, rd) : glassShade(p, rd); gDepth = h.x; }
+  else if (rd.y < -.002) { float tf = -ro.y / rd.y; vec3 p = ro + rd * tf; col = floorCol(p, rd); gDepth = tf; }
+  else col = backdrop(rd);
+  // flare streak when the cap seats
+  vec2 fp = uv - vec2(-uShift * 0. , .62);
+  col += vec3(1.,.8,.55) * uFlare * (exp(-abs(fp.y) * 60.) * exp(-abs(fp.x) * 1.2) * 2. + exp(-length(fp) * 9.) * 2.);
+  return col * uFade;
+}`,
+});
+
+Reel.scene({
+  duration: 10, fps: 30,
+  fonts: ['900 120px "Noto Serif CJK SC"', '500 28px "Noto Serif CJK SC"', '300 26px Inter'],
+  cues: [{ t: 0.1, sfx: 'swell', gain: 0.5 }, { t: 1.5, sfx: 'whoosh', gain: 0.4 }, { t: 2.0, sfx: 'riser_short', gain: 0.5 }, { t: 4.4, sfx: 'clink', gain: 1.0 },
+    { t: 4.42, sfx: 'impact_soft', gain: 0.6 }, { t: 4.5, sfx: 'sparkle', gain: 0.6 }, { t: 6.4, sfx: 'whoosh', gain: 0.4 }, { t: 6.9, sfx: 'chime', gain: 0.6 }],
+  render(t) {
+    const OPEN_T0 = 1.0; if (t < 2) t = OPEN_T0 + (2 - OPEN_T0) * t / 2; // no blank opening: frame 0 starts mid-intro
+
+    const land = 4.4;
+    // cap: descends spinning, decelerating, seats with a tiny bounce
+    let capY = 0, capYaw = 0;
+    if (t < land) { const u = inv(1.2, land, t); capY = 2.4 * Math.pow(1 - E.outCubic(u), 1.0); capYaw = (1 - E.outCubic(u)) * 6.5; if (t < 1.2) capY = 2.4; }
+    else { const k = t - land; capY = 0.03 * Math.exp(-k * 14) * Math.abs(Math.sin(k * 40)); }
+    const flare = Math.exp(-Math.pow((t - land - 0.06) / 0.22, 2)) * 1.0;
+    const wave = 0.022 * Math.exp(-(t - land) * 2.2) * (t > land ? 1 : 0);
+    const yaw = -0.5 + 0.55 * E.inOutSine(clamp(t / 10));
+    const ang = lerp(0.55, -0.2, E.inOutSine(clamp(t / 10))), rad = lerp(4.3, 3.7, E.inOutSine(clamp(t / 10)));
+    const camH = lerp(0.75, 1.2, E.inOutSine(clamp(t / 10)));
+    const ro = [Math.sin(ang) * rad, camH, Math.cos(ang) * rad];
+    const ta = [0, lerp(1.25, 1.05, E.inOutSine(clamp(t / 10))), 0];
+    const sweep = lerp(-2.2, 2.0, E.inOutSine(inv(0.2, 3.8, t))) + 0.35 * Math.sin(t * 0.6);
+    const shift = 0.5 * E.inOutCubic(inv(6.0, 7.6, t));
+    rm.set('uRo', ro).set('uTa', ta).set('uYaw', yaw).set('uCapY', capY).set('uCapYaw', capYaw).set('uFlare', flare).set('uWave', wave)
+      .set('uSweep', sweep).set('uFade', E.inOutSine(clamp(t / 1.0))).set('uShift', shift).set('uTop', 2.5 + capY);
+    const fd = Math.hypot(ro[0], ro[1] - 1.0, ro[2]);
+    rm.render(t, { focus: fd, aperture: 9, maxCoc: 12 });
+    // type
+    const els = capEls; els.forEach((el, i) => { const a = E.outCubic(inv(6.2 + i * 0.15, 6.9 + i * 0.15, t)); el.style.opacity = a; el.style.transform = `translateY(${(1 - a) * 30}px)`; });
+    lineEl.style.width = 420 * E.inOutCubic(inv(7.2, 8.2, t)) + 'px';
+  },
+});
+stage.insertAdjacentHTML('beforeend', `<div id="cap"><div class="mk"><div class="a">${C.a}</div></div><div class="mk"><div class="b">${C.b}</div></div><div class="c"></div><div class="mk"><div class="d">${C.d}</div></div></div>`);
+const capEls = [...stage.querySelectorAll('#cap .a, #cap .b, #cap .d')];
+const lineEl = stage.querySelector('#cap .c');
+</script></body></html>

@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>04 线条动画 · Harmonograph</title>
+<script src="../../lib/core.js"></script>
+</head><body><div id="stage"></div>
+<script>
+/* ===== 04 线条动画 · 谐波画线机 =====
+   A real harmonograph: two decaying pendulums steer a pen across paper. We start macro on the pen tip, following the
+   wet line; then the camera pulls back and reveals the whole figure (the hook). A second pen in indigo weaves
+   a counter-figure through the first. Every line is the actual pendulum equation, sampled 40,000 times. */
+const { E, clamp, inv, lerp, rng, hash } = Reel;
+const stage = Reel.makeStage('#f1ebdf');
+const C = Reel.cfg({ title: '谐波之舞', en: 'HARMONOGRAPH', sign: 'XIAOXIONG' });
+const cv = Reel.canvas2d(stage); const g = cv.ctx;
+let PAPER;
+function harmono(o, N, T) {
+  const pts = new Float32Array(N * 2);
+  for (let i = 0; i < N; i++) { const s = i / (N - 1) * T;
+    const x = o.a1 * Math.sin(o.f1 * s + o.p1) * Math.exp(-o.d1 * s) + o.a2 * Math.sin(o.f2 * s + o.p2) * Math.exp(-o.d2 * s);
+    const y = o.a3 * Math.sin(o.f3 * s + o.p3) * Math.exp(-o.d3 * s) + o.a4 * Math.sin(o.f4 * s + o.p4) * Math.exp(-o.d4 * s);
+    const c = Math.cos(o.rot), sn = Math.sin(o.rot);
+    pts[i * 2] = 960 + x * c - y * sn; pts[i * 2 + 1] = 540 + x * sn + y * c; }
+  return pts;
+}
+const N = 42000;
+const F1 = harmono({ a1: 215, f1: 3.001, p1: 1.57, d1: 0.004, a2: 175, f2: 2.0, p2: 0, d2: 0.004, a3: 215, f3: 3.0, p3: 0, d3: 0.004, a4: 175, f4: 2.003, p4: 1.0, d4: 0.004, rot: 0 }, N, 420);
+const F2 = harmono({ a1: 330, f1: 1.002, p1: 1.57, d1: 0.0045, a2: 110, f2: 3.0, p2: 0, d2: 0.006, a3: 330, f3: 1.0, p3: 0, d3: 0.0045, a4: 110, f4: 3.003, p4: 1.0, d4: 0.006, rot: 0 }, N, 380);
+// draw progress (sample index) over time: pen 1 from 0s, pen 2 from 4.6s
+const EV = { pen2: 3.0, done: 4.4, hook: 4.5, flat: 6.0, title: 6.5 };
+const n1 = (t) => Math.floor(N * (0.3 + 0.7 * E.inQuad(clamp(t / EV.pen2))));
+const n2 = (t) => Math.floor(N * E.inOutSine(inv(EV.pen2, EV.done, t)));
+function makePaper() {
+  const c = document.createElement('canvas'), k = Reel.RS; c.width = 1920 * k | 0; c.height = 1080 * k | 0;
+  const x = c.getContext('2d', { willReadFrequently: true }); x.scale(k, k);
+  x.fillStyle = '#f1ebdf'; x.fillRect(0, 0, 1920, 1080);
+  const r = rng(9);
+  for (let i = 0; i < 12000; i++) { x.fillStyle = `rgba(${r() < 0.6 ? '110,90,60' : '255,255,255'},${0.025 + r() * 0.05})`; x.fillRect(r() * 1920, r() * 1080, 1 + r() * 1.8, 1 + r() * 1.8); }
+  for (let i = 0; i < 500; i++) { x.strokeStyle = `rgba(140,120,90,${0.04 + r() * 0.05})`; x.lineWidth = 0.5; const px = r() * 1920, py = r() * 1080, a = r() * 6.3; x.beginPath(); x.moveTo(px, py); x.lineTo(px + Math.cos(a) * 18, py + Math.sin(a) * 18); x.stroke(); }
+  // deckle margin + registration marks
+  x.strokeStyle = 'rgba(60,50,40,.18)'; x.lineWidth = 1; x.strokeRect(120, 70, 1680, 940);
+  return c;
+}
+function drawFig(P, n, color, w, zoom) {
+  if (n < 2) return;
+  g.strokeStyle = color; g.lineWidth = w / zoom; g.lineJoin = 'round'; g.lineCap = 'round';
+  const CH = 1500; // chunks so older line can fade a touch darker (ink dried) vs. fresh wet ink
+  for (let s = 0; s < n - 1; s += CH) {
+    const e = Math.min(n - 1, s + CH);
+    g.beginPath(); g.moveTo(P[s * 2], P[s * 2 + 1]);
+    for (let i = s + 1; i <= e; i++) g.lineTo(P[i * 2], P[i * 2 + 1]);
+    g.globalAlpha = 0.62; g.stroke();
+  }
+  // wet sheen on the freshest ink
+  const s0 = Math.max(0, n - 220);
+  g.beginPath(); g.moveTo(P[s0 * 2], P[s0 * 2 + 1]); for (let i = s0 + 1; i < n; i++) g.lineTo(P[i * 2], P[i * 2 + 1]);
+  g.globalAlpha = 1; g.lineWidth = (w * 1.7) / zoom; g.stroke(); g.globalAlpha = 1;
+}
+function pen(x, y, color, zoom, lift) {
+  // brass pen holder seen from above: barrel + collar, with soft cast shadow
+  const k = 1 / zoom; g.save(); g.translate(x, y);
+  const sh = (18 + lift * 40) * k;
+  g.save(); g.translate(sh, sh * 0.8); g.filter = `blur(${8 * k * Reel.RS}px)`; g.fillStyle = 'rgba(40,30,20,.32)';
+  g.beginPath(); g.moveTo(0, 0); g.lineTo(-700 * k, -900 * k); g.lineTo(-640 * k, -940 * k); g.lineTo(8 * k, -10 * k); g.fill(); g.restore();
+  const bar = g.createLinearGradient(-30 * k, 0, 30 * k, 0); bar.addColorStop(0, '#6d5326'); bar.addColorStop(0.35, '#f3d48b'); bar.addColorStop(0.6, '#b98d3c'); bar.addColorStop(1, '#5a4320');
+  g.rotate(-0.66);
+  g.fillStyle = bar; g.fillRect(-14 * k, -900 * k, 28 * k, 860 * k);
+  g.fillStyle = '#2b2b2b'; g.beginPath(); g.moveTo(-14 * k, -40 * k); g.lineTo(14 * k, -40 * k); g.lineTo(3 * k, -2 * k); g.lineTo(-3 * k, -2 * k); g.fill();
+  g.fillStyle = color; g.beginPath(); g.arc(0, 0, 3.2 * k, 0, 6.3); g.fill();
+  g.fillStyle = bar; g.fillRect(-22 * k, -120 * k, 44 * k, 34 * k);
+  g.restore();
+}
+
+// ---- 3D sculpture: draw order = time, so drawing order becomes height ----
+function sculpt(P, n, color, zTop, zBase, view) {
+  const { phi, psi, h, cx, cy, sc } = view; const cph = Math.cos(phi), sph = Math.sin(phi), cps = Math.cos(psi), sps = Math.sin(psi);
+  const CH = 100, segs = [];
+  for (let s = 0; s < n - 1; s += CH) segs.push(s);
+  const proj = (i) => { const x = P[i * 2] - 960, y = P[i * 2 + 1] - 540; const z = (zBase + (1 - i / N) * zTop) * h; const xr = x * cps - y * sps, yr = x * sps + y * cps; return [cx + xr * sc, cy + (yr * cph - z * sph) * sc, yr * sph + z * cph]; };
+  // shadow on the paper (flattened, offset by height)
+  if (h > 0.01) { g.save(); g.strokeStyle = 'rgba(70,50,30,.10)'; g.lineWidth = 2.4; g.beginPath(); for (let i = 0; i < n; i += 6) { const x = P[i * 2] - 960, y = P[i * 2 + 1] - 540; const z = (zBase + (1 - i / N) * zTop) * h; const xr = x * cps - y * sps, yr = x * sps + y * cps; const X = cx + (xr + z * 0.35) * sc, Y = cy + (yr + z * 0.25) * cph * sc; i ? g.lineTo(X, Y) : g.moveTo(X, Y); } g.stroke(); g.restore(); }
+  const items = segs.map((s) => { const e = Math.min(n - 1, s + CH); const pts = []; for (let i = s; i <= e; i += 2) pts.push(proj(i)); pts.push(proj(e)); return { pts, d: pts[0][2] }; });
+  items.sort((a, b) => a.d - b.d);
+  g.strokeStyle = color; g.lineJoin = 'round'; g.lineCap = 'round';
+  for (const it of items) { const k = clamp(0.5 + it.d / 900, 0.25, 1); g.globalAlpha = 0.35 + 0.45 * k; g.lineWidth = 0.7 + 1.0 * k; g.beginPath(); it.pts.forEach((p, j) => (j ? g.lineTo(p[0], p[1]) : g.moveTo(p[0], p[1]))); g.stroke(); }
+  g.globalAlpha = 1; return proj;
+}
+function titleDraw(t) {
+  const a = t - EV.title; if (a < 0) return;
+  const x = 170, y = 560; g.save(); g.font = '900 150px "Noto Serif CJK SC"'; g.textBaseline = 'middle'; g.textAlign = 'left';
+  // hatch fill appears after the outline is drawn
+  const fill = clamp((a - 0.35) / 0.3);
+  if (fill > 0) { g.save(); g.beginPath(); g.rect(x - 10, y - 100, 640 * fill, 200); g.clip();
+    const tc = document.createElement('canvas'); void tc; g.fillStyle = 'rgba(36,55,107,.0)';
+    g.globalCompositeOperation = 'source-over'; g.save(); g.fillStyle = '#24376b'; g.globalAlpha = 0.9; g.fillText(C.title, x, y); g.globalCompositeOperation = 'destination-out'; g.restore(); g.restore();
+    // paper-coloured hatch knocks out stripes so the fill reads as parallel lines
+    g.save(); g.beginPath(); g.rect(x - 10, y - 100, 640 * fill, 200); g.clip(); g.strokeStyle = '#f1ebdf'; g.lineWidth = 3.2; for (let k = -40; k < 120; k++) { g.beginPath(); g.moveTo(x - 100 + k * 7, y + 110); g.lineTo(x + 100 + k * 7, y - 110); g.stroke(); } g.restore(); }
+  g.strokeStyle = '#c8402e'; g.lineWidth = 2.6; g.setLineDash([Math.max(0.1, 1600 * E.outCubic(clamp(a / 0.4))), 100000]); g.strokeText(C.title, x, y); g.setLineDash([]);
+  const ea = clamp((a - 0.3) / 0.3); g.globalAlpha = ea; g.font = '600 30px Inter'; g.letterSpacing = '16px'; g.fillStyle = '#2a2622'; g.fillText(C.en, x + 6, y + 125);
+  g.restore();
+}
+
+Reel.scene({
+  duration: 10, fps: 30,
+  fonts: ['900 150px "Noto Serif CJK SC"', '600 30px Inter', '500 15px Inter'],
+  async setup() { PAPER = makePaper(); },
+  cues: [{ t: 0.02, sfx: 'pen', gain: 0.6 }, { t: 1.0, sfx: 'pen', gain: 0.4 }, { t: 2.0, sfx: 'pen', gain: 0.5 }, { t: EV.pen2, sfx: 'tick', gain: 0.7 }, { t: EV.pen2 + 0.02, sfx: 'pen', gain: 0.5 },
+    { t: 4.0, sfx: 'riser_short', gain: 0.5 }, { t: EV.hook, sfx: 'impact', gain: 0.9 }, { t: EV.hook + 0.02, sfx: 'swell', gain: 0.6 }, { t: 5.0, sfx: 'sparkle', gain: 0.4 }, { t: 5.5, sfx: 'sparkle', gain: 0.35 },
+    { t: EV.flat, sfx: 'whoosh', gain: 0.5 }, { t: EV.title, sfx: 'scribble', gain: 0.6 }, { t: EV.title + 0.35, sfx: 'chime', gain: 0.7 }],
+  render(t) {
+    cv.begin();
+    const a = n1(t), b = n2(t);
+    const tip1 = [F1[Math.max(0, a - 1) * 2], F1[Math.max(0, a - 1) * 2 + 1]];
+    if (t < EV.hook) {
+      // macro on pen 1 -> pull back as the pendulums speed up
+      const pull = E.inOutCubic(clamp(t / EV.pen2));
+      const zoom = lerp(3.4, 1.0, pull);
+      const fx = lerp(tip1[0], 960, pull), fy = lerp(tip1[1], 540, pull);
+      g.save(); g.translate(960, 540); g.scale(zoom, zoom); g.translate(-fx, -fy);
+      g.drawImage(PAPER, 0, 0, 1920, 1080);
+      drawFig(F1, a, '#c8402e', 1.25 * Math.min(zoom, 1.6), zoom > 1.6 ? zoom / 1.6 : 1);
+      drawFig(F2, b, '#24376b', 1.15, 1);
+      { const off = E.inCubic(inv(EV.pen2, EV.pen2 + 0.4, t)) * 1400; if (off < 1300) pen(tip1[0] - off * 0.75, tip1[1] - off, '#c8402e', zoom, inv(EV.pen2, EV.pen2 + 0.2, t)); }
+      if (b > 0) { const off = E.inCubic(inv(EV.done, EV.done + 0.3, t)) * 1400; const p2 = [F2[(b - 1) * 2], F2[(b - 1) * 2 + 1]]; if (off < 1300) pen(p2[0] - off * 0.75, p2[1] - off, '#24376b', zoom, inv(EV.done, EV.done + 0.15, t)); }
+      g.restore();
+      if (zoom > 1.3) { const k = clamp((zoom - 1.3) / 2); const vg = g.createRadialGradient(960, 540, 260, 960, 540, 1100); vg.addColorStop(0, 'rgba(241,235,223,0)'); vg.addColorStop(1, `rgba(220,210,190,${0.75 * k})`); g.fillStyle = vg; g.fillRect(0, 0, 1920, 1080); }
+    } else {
+      // the drawing stands up: height = drawing order
+      const up = t < EV.flat ? E.outBack(clamp((t - EV.hook) / 0.5), 1.2) : 1 - E.inOutCubic(clamp((t - EV.flat) / 0.5));
+      const phi = 0.96 * up, psi = 0.44 * E.inOutSine(clamp((t - 5.0) / 1.0)) * (t < EV.flat ? 1 : 1 - E.inOutCubic(clamp((t - EV.flat) / 0.5)));
+      const move = E.inOutCubic(clamp((t - EV.flat) / 0.5)), cx = lerp(960, 1330, move), cy = lerp(560, 540, move) + 80 * up, sc = lerp(1, 0.86, move) * (1 + 0.03 * clamp((t - 7) / 3));
+      // paper tilts with the camera
+      g.fillStyle = '#ece5d8'; g.fillRect(0, 0, 1920, 1080); g.save(); g.translate(cx, cy); g.scale(sc, sc * Math.cos(phi)); g.translate(-960, -540); for (let ix = -1; ix <= 1; ix++) for (let iy = -1; iy <= 2; iy++) g.drawImage(PAPER, ix * 1920, iy * 1080, 1920, 1080); g.restore();
+      const view = { phi, psi, h: up, cx, cy, sc };
+      const p1 = sculpt(F1, N, '#c8402e', 420, 0, view); const p2 = sculpt(F2, N, '#24376b', 300, 60, view);
+      // a bright spark races along the curve on each beat
+      if (t >= 5.0 && t < EV.flat) { const u = ((t - 5.0) / 0.5) % 1, which = Math.floor((t - 5.0) / 0.5) % 2; const pr = which ? p2 : p1;
+        for (let k = 0; k < 14; k++) { const i = Math.floor(clamp(u - k * 0.004) * (N - 1)); const [x, y] = pr(i); g.fillStyle = `rgba(255,${which ? 230 : 210},${which ? 160 : 120},${1 - k / 14})`; g.beginPath(); g.arc(x, y, 6 - k * 0.3, 0, 6.3); g.fill(); } }
+      titleDraw(t);
+    }
+    const vg = g.createRadialGradient(960, 540, 500, 960, 540, 1150); vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(60,40,20,.22)'); g.fillStyle = vg; g.fillRect(0, 0, 1920, 1080);
+    g.save(); g.globalAlpha = 0.55 * inv(0.3, 1.0, t) * (1 - inv(4.3, 4.6, t)); g.font = '500 15px Inter'; g.fillStyle = '#2a2622'; g.textAlign = 'right'; g.letterSpacing = '3px';
+    g.fillText(`f₁ 3.001 Hz   f₂ 2.000 Hz   τ ${(a / N * 420).toFixed(1)} s`, 1770, 110); g.restore();
+  },
+});
+</script></body></html>

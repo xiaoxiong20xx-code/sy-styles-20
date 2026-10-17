@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>13 像素风 · Sunset Express</title>
+<script src="../../lib/core.js"></script>
+</head><body><div id="stage"></div>
+<script>
+/* ===== 13 像素风 · 黄昏特快 =====
+   A 320×180 canvas, every pixel placed by code: a Bayer-dithered sunset sky that steps down through a fixed
+   palette, a sea with colour-cycled glints, a cliff-top town whose windows switch on one by one, a lighthouse beam,
+   and an evening train that thunders across the viaduct (the hook). Upscaled 6× with no smoothing. */
+const { E, clamp, inv, lerp, hash } = Reel;
+const stage = Reel.makeStage('#0b0b24');
+const C = Reel.cfg({ title: '黄昏特快', sub: 'SUNSET EXPRESS', sign: 'XIAOXIONG' });
+const LW = 320, LH = 180;
+const low = document.createElement('canvas'); low.width = LW; low.height = LH; const x = low.getContext('2d', { willReadFrequently: true });
+const out = Reel.canvas2d(stage); const g = out.ctx;
+const BAYER = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5].map((v) => (v + 0.5) / 16);
+const hx = (h) => { const n = parseInt(h.slice(1), 16); return [n >> 16 & 255, n >> 8 & 255, n & 255]; };
+const SKY_D = ['#2b1b4f', '#5a2a6a', '#a43c6c', '#e2685e', '#f6a35a', '#fdd88a'].map(hx);
+const SKY_N = ['#07081c', '#0f1030', '#1d1747', '#33205a', '#55306a', '#7e3e6c'].map(hx);
+const HOR = 112;
+const r = (c, X, Y, W, H) => { x.fillStyle = c; x.fillRect(X | 0, Y | 0, W | 0, H | 0); };
+let TXT = null;
+function pixelText(s, size, col) { // threshold anti-aliasing away -> crisp pixel glyphs
+  const c = document.createElement('canvas'); c.width = 200; c.height = size + 6; const q = c.getContext('2d', { willReadFrequently: true });
+  q.font = `900 ${size}px "Noto Sans CJK SC"`; q.fillStyle = col; q.textBaseline = 'top'; q.fillText(s, 1, 1);
+  const id = q.getImageData(0, 0, c.width, c.height); for (let i = 3; i < id.data.length; i += 4) id.data[i] = id.data[i] > 110 ? 255 : 0; q.putImageData(id, 0, 0);
+  const w = Math.ceil(q.measureText(s).width) + 2; return { c, w };
+}
+const HOUSES = [[206, 92, 14, 10, '#c9604c'], [222, 88, 12, 14, '#e0b77a'], [236, 90, 16, 12, '#8f5e8e'], [254, 84, 12, 18, '#d2785a'], [268, 90, 14, 12, '#6e8fb0'], [284, 86, 10, 16, '#e0b77a']];
+Reel.scene({
+  duration: 10, fps: 30,
+  fonts: ['900 16px "Noto Sans CJK SC"', '700 22px Inter'],
+  async setup() { TXT = [pixelText(C.title, 18, '#fff1c9'), pixelText(C.title, 18, '#2a1240')]; },
+  cues: [{ t: 0.1, sfx: 'powerup', gain: 0.5 }, { t: 1.5, sfx: 'coin', gain: 0.4 }, { t: 2.6, sfx: 'coin', gain: 0.4 }, { t: 3.4, sfx: 'jump', gain: 0.5 },
+    { t: 3.9, sfx: 'whoosh', gain: 0.7 }, { t: 4.4, sfx: 'flag', gain: 0.8 }, { t: 5.0, sfx: 'blocks', gain: 0.6 }, { t: 5.6, sfx: 'blocks', gain: 0.5 }, { t: 6.2, sfx: 'blocks', gain: 0.4 },
+    { t: 7.4, sfx: 'levelup', gain: 0.7 }, { t: 8.2, sfx: 'sparkle', gain: 0.5 }],
+  render(t) {
+    // time of day steps (pixel art changes in discrete palette steps)
+    const night = Math.floor(E.inOutSine(clamp((t - 1.0) / 8.0)) * 8) / 8;
+    const PAL = SKY_D.map((c, i) => c.map((v, j) => Math.round(lerp(v, SKY_N[i][j], night))));
+    const cam = Math.round(-E.inOutSine(clamp(t / 10)) * 24);
+    const id = x.createImageData(LW, HOR); const d = id.data;
+    for (let yy = 0; yy < HOR; yy++) {
+      const v = (yy / HOR) * (SKY_D.length - 1);
+      for (let xx = 0; xx < LW; xx++) {
+        const b = BAYER[(yy & 3) * 4 + (xx & 3)]; let i0 = Math.floor(v), f = v - i0; if (f > b) i0++; i0 = Math.min(SKY_D.length - 1, i0);
+        const c = PAL[i0]; const k = (yy * LW + xx) * 4; d[k] = c[0]; d[k + 1] = c[1]; d[k + 2] = c[2]; d[k + 3] = 255;
+      }
+    }
+    x.putImageData(id, 0, 0);
+    // stars
+    if (night > 0.3) for (let i = 0; i < 60; i++) { const sx = (hash(i) * LW) | 0, sy = (hash(i + 9) * 80) | 0; if (hash(i + Math.floor(t * 6)) > 0.25 * (1 - night) + 0.3) r(night > 0.6 && i % 7 === 0 ? '#fff6c8' : '#c8c0ff', sx, sy, 1, 1); }
+    // sun (sinks)
+    const sy = Math.round(lerp(62, HOR + 18, E.inOutSine(clamp(t / 8.5)))), sx = 150 + cam * 0.2;
+    for (let yy = -16; yy <= 16; yy++) { const w = Math.floor(Math.sqrt(256 - yy * yy)); if (sy + yy < HOR) r(yy < -6 ? '#fff3b0' : yy < 4 ? '#ffd27a' : '#ff9e5e', sx - w, sy + yy, w * 2, 1); }
+    // far islands
+    x.fillStyle = night > 0.5 ? '#1a1236' : '#4a2a5e'; x.beginPath(); x.moveTo(-10 + cam * 0.2, HOR); for (let i = 0; i <= 18; i++) x.lineTo(-10 + i * 6 + cam * 0.2, HOR - Math.round(4 + 6 * Math.sin(i * 0.5) + 3 * hash(i))); x.lineTo(120 + cam * 0.2, HOR); x.fill();
+    // sea
+    const sea = night > 0.5 ? ['#0c1a3a', '#11264a', '#1a3460'] : ['#24406e', '#2f5583', '#3d6a98'];
+    for (let yy = HOR; yy < LH; yy++) r(sea[Math.min(2, Math.floor((yy - HOR) / 22))], 0, yy, LW, 1);
+    for (let k = 0; k < 40; k++) { const yy = HOR + 3 + ((hash(k * 3) * 60) | 0), xx = ((hash(k) * 360 + t * (6 + (yy - HOR) * 0.2)) % 360) - 20; r(night > 0.5 ? '#1e3a66' : '#5a86b4', xx, yy, 6 + (k % 3) * 3, 1); }
+    // colour-cycled glints: sun / moon path + random sparkles
+    const cyc = ['#ffe9a8', '#ffb46a', '#ff7a5a', '#3d6a98'];
+    for (let yy = HOR + 1; yy < LH - 30; yy += 2) { const span = 4 + (yy - HOR) * 0.9; for (let k = 0; k < 4; k++) { const ph = Math.floor(t * 10 + yy * 0.7 + k * 3) % 4; const gx = sx - span / 2 + hash(yy * 3 + k) * span; if (ph < 3) r(night > 0.6 ? ['#c8d8ff', '#8fa8e0', '#5a7ab8'][ph] : cyc[ph], gx, yy, 2 + (k % 2) * 2, 1); } }
+    for (let i = 0; i < 30; i++) { const ph = Math.floor(t * 8 + i * 1.7) % 6; if (ph < 2) r('#9ec2e8', (hash(i * 5) * LW) | 0, HOR + 4 + ((hash(i * 7) * 50) | 0), 3, 1); }
+    // cliff + town (parallax 0.6)
+    const ox = cam * 0.6;
+    { const CL = [[184, LH], [187, 138], [191, 122], [195, 111], [201, 104], [212, 99], [240, 97], [300, 95], [334, 93], [334, LH]];
+      x.fillStyle = night > 0.5 ? '#1e1532' : '#4a2c46'; x.beginPath(); CL.forEach(([a, b], i) => (i ? x.lineTo(a + ox, b) : x.moveTo(a + ox, b))); x.fill();
+      // rock strata + texture
+      for (let yy = 100; yy < LH; yy++) for (let xx = 186; xx < 334; xx++) { const h = hash(xx * 13.1 + yy * 7.7); if (h > 0.9) { const edge = 184 + (LH - yy) * 0.14; if (xx > edge + 2 + (yy < 112 ? 12 : 0)) r(night > 0.5 ? '#160f28' : '#3a2038', xx + ox, yy, 1, 1); } }
+      for (let k = 0; k < 6; k++) { const yy = 112 + k * 11; r(night > 0.5 ? '#2a1f44' : '#6a3c56', 190 + k * 2 + ox, yy, 140, 1); }
+      r(night > 0.5 ? '#3a6a4a' : '#6a9a5a', 200 + ox, 98, 134, 2); r(night > 0.5 ? '#2a4a3a' : '#4a7a4a', 196 + ox, 100, 6, 2);
+      // surf at the foot
+      for (let k = 0; k < 5; k++) { const ph = Math.floor(t * 6 + k) % 4; if (ph < 2) r('#cfe2f2', 180 + k * 2 + ox, 132 + k * 8 + ph, 4, 1); } }
+    HOUSES.forEach(([hxp, hy, hw, hh, col], i) => {
+      const X = hxp + ox; r(night > 0.5 ? '#3a2e55' : col, X, hy, hw, hh);
+      x.fillStyle = night > 0.5 ? '#21183a' : '#7a3a3a'; x.beginPath(); x.moveTo(X - 1, hy); x.lineTo(X + hw / 2, hy - 5); x.lineTo(X + hw + 1, hy); x.fill();
+      const lit = t > 2.2 + i * 0.35; r(lit ? (Math.floor(t * 3 + i) % 9 === 0 ? '#ffd27a' : '#ffe9a8') : '#24304a', X + 3, hy + 4, 3, 3); if (hw > 12) r(lit && t > 3 + i * 0.3 ? '#ffe9a8' : '#24304a', X + hw - 6, hy + 4, 3, 3);
+    });
+    // lighthouse + beam
+    const LX = 304 + ox; r('#efe6da', LX, 66, 6, 26); r('#c8463c', LX, 72, 6, 3); r('#c8463c', LX, 80, 6, 3); r('#3a2e55', LX - 1, 62, 8, 4); r('#ffe9a8', LX + 1, 63, 4, 2);
+    if (night > 0.2) { const a = Math.sin(t * 2.2); x.save(); x.globalAlpha = 0.28 * night; x.fillStyle = '#fff2b0'; x.beginPath(); x.moveTo(LX + 3, 64); x.lineTo(LX + 3 + a * 110, 56); x.lineTo(LX + 3 + a * 110, 72); x.fill(); x.restore(); }
+    // birds
+    for (let i = 0; i < 4; i++) { const bx = ((t * (14 + i * 3) + i * 70) % 380) - 30, by = 40 + i * 9 + Math.sin(t * 2 + i) * 3; const up = Math.floor(t * 8 + i) % 2; const col = night > 0.5 ? '#9a8ac8' : '#3a1f45'; r(col, bx, by + up, 2, 1); r(col, bx + 2, by + 1 - up, 1, 1); r(col, bx + 3, by + up, 2, 1); }
+    // viaduct (parallax 1)
+    const vx = cam; const deck = 142;
+    for (let ax = -40; ax < 380; ax += 48) { const X = ax + vx; x.fillStyle = night > 0.5 ? '#2a2238' : '#5a3a3a'; x.fillRect(X, deck, 48, 4); x.fillRect(X + 2, deck + 4, 6, LH); x.fillRect(X + 40, deck + 4, 6, LH);
+      for (let k = 0; k < 16; k++) { const yy = deck + 4 + Math.round(16 * Math.sin(k / 15 * Math.PI) * -1 + 16); x.fillRect(X + 8 + k * 2, deck + 4, 2, Math.max(1, 20 - Math.round(16 * Math.sin(k / 15 * Math.PI)))); } }
+    r(night > 0.5 ? '#4a3a5a' : '#8a5a4a', 0, deck - 2, LW, 2);
+    // train
+    const tx = Math.round(lerp(-200, 420, clamp((t - 3.6) / 4.2)));
+    if (t > 3.4 && t < 8.2) {
+      for (let c = 0; c < 4; c++) { const X = tx - c * 46 + vx; const body = c === 0 ? '#d8463c' : '#e8d8b8';
+        r('#1b1428', X + 2, deck - 4, 40, 3); r(body, X, deck - 22, 44, 18); r(c === 0 ? '#a8302c' : '#c8b898', X, deck - 8, 44, 3); r('#1b1428', X, deck - 24, 44, 2);
+        for (let w = 0; w < 5; w++) r(night > 0.3 ? '#ffe9a8' : '#7ab0d8', X + 4 + w * 8, deck - 18, 5, 6);
+        const wh = Math.floor(t * 20) % 2; r('#1b1428', X + 6, deck - 4 + wh, 4, 3); r('#1b1428', X + 34, deck - 4 + wh, 4, 3); }
+      r('#fff6c8', tx + 44 + vx, deck - 12, 2, 3);
+      x.save(); x.globalAlpha = 0.35; x.fillStyle = '#fff6c8'; x.beginPath(); x.moveTo(tx + 46 + vx, deck - 11); x.lineTo(tx + 120 + vx, deck - 22); x.lineTo(tx + 120 + vx, deck + 2); x.fill(); x.restore();
+      for (let p = 0; p < 6; p++) { const age = ((t * 3 + p / 6) % 1); const px = tx + 30 + vx - age * 60, py = deck - 26 - age * 18; const rr = 2 + Math.floor(age * 4); x.fillStyle = `rgba(230,220,240,${0.8 * (1 - age)})`; x.fillRect(Math.round(px - rr), Math.round(py - rr), rr * 2, rr * 2); }
+      // sparks under the wheels
+      if (Math.floor(t * 15) % 3 === 0) for (let k = 0; k < 3; k++) r('#ffd27a', tx - k * 46 + 20 + vx + ((hash(k + Math.floor(t * 15)) * 20) | 0), deck + 1, 1, 1);
+    }
+    // title (pixel)
+    const ta = clamp((t - 6.5) / 0.4);
+    if (ta > 0 && TXT) { const ty = Math.round(lerp(22, 18, ta)); const tw = TXT[0].w; const X = Math.round(LW / 2 - tw / 2);
+      if (Math.floor(t * 12) % 2 === 0 || ta >= 1) { x.drawImage(TXT[1].c, X + 1, ty + 1); x.drawImage(TXT[0].c, X, ty); }
+      r('#fff1c9', X, ty + 23, Math.round(tw * clamp((t - 6.9) / 0.3)), 1); }
+    // upscale
+    out.begin(); g.imageSmoothingEnabled = false; g.drawImage(low, 0, 0, 1920, 1080);
+    // CRT-ish subtle pixel grid
+    g.fillStyle = 'rgba(0,0,0,.08)'; for (let yy = 0; yy < 1080; yy += 6) g.fillRect(0, yy, 1920, 1);
+    if (ta > 0.5) { g.font = '700 30px Inter'; g.fillStyle = 'rgba(255,241,201,.8)'; g.textAlign = 'center'; g.letterSpacing = '10px'; g.fillText(C.sub, 960, 290); }
+    g.font = '700 18px Inter'; g.fillStyle = 'rgba(255,241,201,.55)'; g.textAlign = 'right'; g.letterSpacing = '6px'; g.fillText(C.sign + '  ·  320×180', 1860, 1050);
+  },
+});
+</script></body></html>

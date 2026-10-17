@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>08 赛博朋克 HUD · Orbital Lock</title>
+<script src="../../lib/core.js"></script><script src="../../lib/gl.js"></script>
+</head><body><div id="stage"></div>
+<script>
+/* ===== 08 赛博朋克 HUD · 轨道锁定 =====
+   An amber orbital-targeting HUD. A dot-matrix planet turns under orbit tracks; a scan sweep finds a target, the reticle
+   locks (the hook) and the camera dives from orbit straight into a top-down city grid, where a second lock lands on the block.
+   Everything is drawn in 2D canvas and pushed through a bloom / chromatic aberration / scanline post pass. */
+const { E, clamp, inv, lerp, rng, hash, noise2 } = Reel;
+const stage = Reel.makeStage('#020304');
+const C = Reel.cfg({ tgt: 'TARGET ACQUIRED', name: 'XIAOXIONG HQ', zh: '目标锁定', sys: 'ORBITAL RECON · SAT-07' });
+const src = document.createElement('canvas'); src.width = Math.round(1920 * Reel.RS); src.height = Math.round(1080 * Reel.RS);
+const g = src.getContext('2d');
+const post = Reel.Post(stage, src, { bloom: 1.3, th: 0.35, ca: 2.2, scan: 0.1, vig: 0.45, grain: 0.05, tint: [1, 0.85, 0.6] });
+const AMB = '#ffb21e', AMB2 = 'rgba(255,178,30,', TEAL = '#3ef0d0', RED = '#ff4a3a';
+// planet dots: fibonacci sphere, keep "land" by 3D-ish noise
+const PTS = []; { const N = 9000; for (let i = 0; i < N; i++) { const y = 1 - 2 * (i + 0.5) / N, r = Math.sqrt(1 - y * y), a = i * 2.39996; const x = Math.cos(a) * r, z = Math.sin(a) * r;
+  const n = noise2(x * 2.1 + z * 0.7 + 3, y * 2.3 + 1.7) * 0.6 + noise2(x * 5 + 9, z * 5 - y * 3) * 0.4; if (n > 0.08) PTS.push([x, y, z, n]); } }
+const STARS = Array.from({ length: 260 }, (_, i) => [hash(i) * 1920, hash(i + 500) * 1080, hash(i + 900)]);
+const TGT = (() => { const lat = 0.42, lon = 0.9; return [Math.cos(lat) * Math.cos(lon), Math.sin(lat), Math.cos(lat) * Math.sin(lon)]; })();
+const R0 = rng(77);
+const BLOCKS = []; for (let i = -9; i <= 9; i++) for (let j = -6; j <= 6; j++) BLOCKS.push({ i, j, h: R0(), park: R0() < 0.08 });
+let S = 1; // design->canvas scale
+const L = (x) => x; // identity helper
+function txt(s, x, y, size = 16, col = AMB, align = 'left', w = 600) { g.font = `${w} ${size}px "JetBrains Mono", "DejaVu Sans Mono", monospace`; g.fillStyle = col; g.textAlign = align; g.fillText(s, x, y); }
+function bracket(x, y, w, h, l, col, lw = 2) { g.strokeStyle = col; g.lineWidth = lw; g.beginPath();
+  g.moveTo(x, y + l); g.lineTo(x, y); g.lineTo(x + l, y); g.moveTo(x + w - l, y); g.lineTo(x + w, y); g.lineTo(x + w, y + l);
+  g.moveTo(x + w, y + h - l); g.lineTo(x + w, y + h); g.lineTo(x + w - l, y + h); g.moveTo(x + l, y + h); g.lineTo(x, y + h); g.lineTo(x, y + h - l); g.stroke(); }
+function rotY(p, a) { const c = Math.cos(a), s = Math.sin(a); return [p[0] * c + p[2] * s, p[1], -p[0] * s + p[2] * c]; }
+function rotX(p, a) { const c = Math.cos(a), s = Math.sin(a); return [p[0], p[1] * c - p[2] * s, p[1] * s + p[2] * c]; }
+
+function planet(t, cx, cy, R, spin) {
+  // atmosphere
+  const at = g.createRadialGradient(cx, cy, R * 0.9, cx, cy, R * 1.25); at.addColorStop(0, AMB2 + '0)'); at.addColorStop(0.35, AMB2 + '.22)'); at.addColorStop(1, AMB2 + '0)'); g.fillStyle = at; g.fillRect(cx - R * 1.4, cy - R * 1.4, R * 2.8, R * 2.8);
+  g.fillStyle = 'rgba(10,8,4,.9)'; g.beginPath(); g.arc(cx, cy, R, 0, 6.3); g.fill();
+  // graticule
+  g.strokeStyle = AMB2 + '.12)'; g.lineWidth = 1;
+  for (let k = -3; k <= 3; k++) { const y = Math.sin(k * 0.4); const rr = Math.cos(k * 0.4); g.beginPath(); for (let a = 0; a <= 64; a++) { let p = [Math.cos(a / 64 * 6.283) * rr, y, Math.sin(a / 64 * 6.283) * rr]; p = rotX(rotY(p, spin), -0.35); if (p[2] < 0) { g.moveTo(cx + p[0] * R, cy - p[1] * R); continue; } g.lineTo(cx + p[0] * R, cy - p[1] * R); } g.stroke(); }
+  for (let k = 0; k < 12; k++) { g.beginPath(); for (let a = 0; a <= 48; a++) { const la = -1.5 + a / 48 * 3; let p = [Math.cos(la) * Math.cos(k * 0.5236), Math.sin(la), Math.cos(la) * Math.sin(k * 0.5236)]; p = rotX(rotY(p, spin), -0.35); if (p[2] < 0) { g.moveTo(cx + p[0] * R, cy - p[1] * R); continue; } g.lineTo(cx + p[0] * R, cy - p[1] * R); } g.stroke(); }
+  // land dots, lit by the scan sweep
+  const sweep = (t * 0.9) % 1;
+  for (const q of PTS) { let p = rotX(rotY(q, spin), -0.35); if (p[2] < 0.02) continue;
+    const lon = Math.atan2(p[0], p[2]); const sw = Math.exp(-Math.pow(((lon / 3.1416 * 0.5 + 0.5) - sweep + 1) % 1 * 14, 2) * 0.5);
+    const lim = 0.35 + 0.65 * p[2];
+    g.fillStyle = sw > 0.05 ? `rgba(255,${220 + sw * 35 | 0},${120 + sw * 120 | 0},${Math.min(1, lim * (0.55 + sw))})` : `rgba(255,178,30,${lim * 0.55})`;
+    const sz = 1.6 + q[3] * 2.2; g.fillRect(cx + p[0] * R - sz / 2, cy - p[1] * R - sz / 2, sz, sz); }
+  // rim
+  g.strokeStyle = AMB2 + '.6)'; g.lineWidth = 1.5; g.beginPath(); g.arc(cx, cy, R, 0, 6.3); g.stroke();
+  const tp = rotX(rotY(TGT, spin), -0.35);
+  return [cx + tp[0] * R, cy - tp[1] * R, tp[2]];
+}
+function orbit(cx, cy, R, tilt, k, t, label) {
+  g.save(); g.translate(cx, cy); g.rotate(tilt); g.strokeStyle = TEAL; g.globalAlpha = 0.5; g.lineWidth = 1.2; g.setLineDash([3, 7]);
+  g.beginPath(); g.ellipse(0, 0, R * 1.55, R * 0.42, 0, 0, 6.3); g.stroke(); g.setLineDash([]); g.globalAlpha = 1;
+  const a = t * (0.5 + k * 0.2) + k * 2; const sx = Math.cos(a) * R * 1.55, sy = Math.sin(a) * R * 0.42;
+  if (Math.sin(a) > -0.15 || Math.hypot(sx, sy * 3) > R) { g.fillStyle = TEAL; g.beginPath(); g.arc(sx, sy, 5, 0, 6.3); g.fill(); g.strokeStyle = TEAL; g.strokeRect(sx - 11, sy - 11, 22, 22);
+    g.rotate(-tilt); const p = [sx * Math.cos(tilt) - sy * Math.sin(tilt), sx * Math.sin(tilt) + sy * Math.cos(tilt)]; g.restore(); g.save(); g.translate(cx, cy); txt(label, p[0] + 16, p[1] - 14, 13, TEAL); }
+  g.restore();
+}
+function city(t, ox, oy, z, lockP) {
+  g.save(); g.translate(ox, oy); g.scale(z, z); g.rotate(0.42 - 0.12 * clamp((t - 5.15) / 3));
+  const B = 120;
+  // roads
+  g.strokeStyle = AMB2 + '.22)'; g.lineWidth = 2 / z;
+  for (let i = -10; i <= 10; i++) { g.beginPath(); g.moveTo(i * B - B / 2, -900); g.lineTo(i * B - B / 2, 900); g.stroke(); }
+  for (let j = -7; j <= 7; j++) { g.beginPath(); g.moveTo(-1300, j * B - B / 2); g.lineTo(1300, j * B - B / 2); g.stroke(); }
+  g.strokeStyle = AMB2 + '.55)'; g.lineWidth = 5 / z; g.beginPath(); g.moveTo(-1300, 700); g.lineTo(1300, -800); g.stroke();
+  // blocks with building footprints, lit by expanding scan rings
+  const ring = ((t - 5.3) * 700) % 1600;
+  for (const b of BLOCKS) { const x = b.i * B, y = b.j * B; const d = Math.hypot(x, y); const lit = Math.exp(-Math.pow((d - ring) / 70, 2));
+    if (b.park) { g.fillStyle = `rgba(62,240,208,${0.06 + lit * 0.3})`; g.fillRect(x - B / 2 + 10, y - B / 2 + 10, B - 20, B - 20); continue; }
+    const n = 2 + (b.h * 3 | 0);
+    for (let k = 0; k < n; k++) for (let m = 0; m < n; m++) { const s = (B - 30) / n; const hh = hash(b.i * 31 + b.j * 17 + k * 5 + m);
+      g.fillStyle = `rgba(255,${160 + lit * 90 | 0},${30 + lit * 160 | 0},${0.05 + hh * 0.16 + lit * 0.55})`; g.fillRect(x - B / 2 + 15 + k * s + 3, y - B / 2 + 15 + m * s + 3, s - 6, s - 6); } }
+  // target block
+  g.strokeStyle = RED; g.lineWidth = 3 / z; g.strokeRect(-B / 2 + 8, -B / 2 + 8, B - 16, B - 16);
+  g.restore();
+}
+function reticle(x, y, s, lock, col, rot) {
+  g.save(); g.translate(x, y); g.rotate(rot);
+  const r = s * (1 + (1 - lock) * 1.8);
+  g.strokeStyle = col; g.lineWidth = 2.5; g.beginPath(); g.arc(0, 0, r, 0, 6.3); g.stroke();
+  for (let k = 0; k < 4; k++) { g.rotate(Math.PI / 2); g.beginPath(); g.moveTo(r + 6, 0); g.lineTo(r + 26, 0); g.stroke(); }
+  g.rotate(-rot); bracket(-r * 0.7 - 18, -r * 0.7 - 18, r * 1.4 + 36, r * 1.4 + 36, 16, col, 2);
+  g.restore();
+}
+
+Reel.scene({
+  duration: 10, fps: 30, fonts: ['900 120px "Noto Sans CJK SC"', '700 30px Inter'],
+  cues: [{ t: 0.05, sfx: 'boot', gain: 0.7 }, { t: 0.8, sfx: 'data', gain: 0.5 }, { t: 2.2, sfx: 'beep', gain: 0.5 }, { t: 2.7, sfx: 'beep', gain: 0.5 }, { t: 3.2, sfx: 'beep', gain: 0.6 },
+    { t: 3.6, sfx: 'lock', gain: 0.9 }, { t: 4.4, sfx: 'zoom', gain: 0.8 }, { t: 5.15, sfx: 'glitch', gain: 0.7 }, { t: 5.3, sfx: 'impact_soft', gain: 0.6 },
+    { t: 6.4, sfx: 'data', gain: 0.4 }, { t: 7.6, sfx: 'lock', gain: 1.0 }, { t: 7.62, sfx: 'beep', gain: 0.6 }],
+  render(t) {
+    g.setTransform(Reel.RS, 0, 0, Reel.RS, 0, 0);
+    g.fillStyle = '#030304'; g.fillRect(0, 0, 1920, 1080);
+    const dive = E.inExpo(inv(4.3, 5.25, t)); // orbit -> street
+    const city0 = 5.15;
+    // stars drift
+    for (const [x, y, b] of STARS) { const sx = ((x - t * 8 * b) % 1920 + 1920) % 1920; g.fillStyle = `rgba(255,230,190,${0.15 + b * 0.5 * (1 - dive)})`; g.fillRect(sx, y, 1.5, 1.5); }
+    let tx = 960, ty = 540;
+    if (t < city0) {
+      const R = 330 * (1 + dive * 26), spin = -0.6 + t * 0.18 - dive * 0.05;
+      // keep the target centred during the dive
+      const tp0 = rotX(rotY(TGT, spin), -0.35);
+      const off = [tp0[0], -tp0[1]];
+      const cx = 960 - off[0] * R * dive, cy = 540 - off[1] * R * dive;
+      const tp = planet(t, cx, cy, R, spin);
+      tx = tp[0]; ty = tp[1];
+      if (dive < 0.2) { orbit(cx, cy, R, -0.25, 0, t, 'SAT-07'); orbit(cx, cy, R * 1.15, 0.45, 1, t, 'SAT-12'); }
+      // scan line on the planet then lock
+      const lockA = E.outCubic(inv(2.1, 3.6, t));
+      if (t > 1.9) reticle(tx, ty, 34, lockA, t > 3.6 ? RED : AMB, (1 - lockA) * 2 + t * 0.4);
+      if (t > 3.6) { txt(C.tgt, tx + 70, ty - 40, 20, RED, 'left', 700); txt('LAT 24.03°N  LON 113.21°E', tx + 70, ty - 14, 14, AMB); }
+      if (dive > 0) { g.fillStyle = `rgba(255,220,170,${Math.min(1, dive * 1.2)})`; g.fillRect(0, 0, 1920, 1080); }
+    } else {
+      const u = E.outCubic(inv(city0, 6.6, t));
+      const z = lerp(4, 1.0, u) * (1 + 0.04 * Math.sin(t * 0.7));
+      city(t, 960, 540, z, 1);
+      const flash = 1 - inv(city0, city0 + 0.5, t); if (flash > 0) { g.fillStyle = `rgba(255,220,170,${flash * 0.8})`; g.fillRect(0, 0, 1920, 1080); }
+      const lockB = E.outCubic(inv(6.4, 7.6, t));
+      reticle(960, 540, 70 * z * 0.8, lockB, t > 7.6 ? RED : AMB, (1 - lockB) * 3);
+      if (t > 7.6) { const k = E.outBack(inv(7.6, 8.0, t)); g.save(); g.translate(1050, 400); g.scale(k, k);
+        g.fillStyle = 'rgba(255,74,58,.15)'; g.fillRect(0, -40, 430, 120); g.strokeStyle = RED; g.lineWidth = 2; g.strokeRect(0, -40, 430, 120);
+        txt(C.name, 20, 0, 30, '#ffd9cf', 'left', 800); txt(C.zh + ' · CONFIDENCE 99.2%', 20, 38, 15, RED, 'left', 700); g.restore(); }
+    }
+    // ===== HUD chrome =====
+    { const sh = g.createLinearGradient(0, 0, 520, 0); sh.addColorStop(0, 'rgba(3,3,4,.75)'); sh.addColorStop(1, 'rgba(3,3,4,0)'); g.fillStyle = sh; g.fillRect(0, 0, 520, 1080);
+      const sb = g.createLinearGradient(0, 940, 0, 1080); sb.addColorStop(0, 'rgba(3,3,4,0)'); sb.addColorStop(1, 'rgba(3,3,4,.8)'); g.fillStyle = sb; g.fillRect(0, 940, 1920, 140); }
+    const boot = E.outCubic(inv(0, 0.7, t));
+    g.globalAlpha = boot;
+    bracket(60, 60, 1800, 960, 60, AMB2 + '.8)', 2);
+    // compass tape
+    g.save(); g.beginPath(); g.rect(560, 70, 800, 46); g.clip();
+    const hd = 132 + t * 6 + dive * 40; for (let d = -40; d <= 40; d++) { const deg = Math.floor(hd) + d, x = 960 + (deg - hd) * 20; g.strokeStyle = AMB2 + '.7)'; g.lineWidth = 1.2; g.beginPath(); g.moveTo(x, 110); g.lineTo(x, deg % 5 ? 100 : 90); g.stroke(); if (deg % 10 === 0) txt(String((deg + 360) % 360).padStart(3, '0'), x, 84, 13, AMB, 'center'); }
+    g.restore(); g.fillStyle = AMB; g.beginPath(); g.moveTo(960, 120); g.lineTo(952, 132); g.lineTo(968, 132); g.fill();
+    // left panel: telemetry
+    txt(C.sys, 100, 120, 15, AMB, 'left', 700);
+    const alt = t < city0 ? 408 - dive * 380 : 2.4 - (t - city0) * 0.1, vel = t < city0 ? 7.66 + dive * 3 : 0.21;
+    txt(`ALT  ${alt.toFixed(1).padStart(7)} KM`, 100, 170, 18); txt(`VEL  ${vel.toFixed(2).padStart(7)} KM/S`, 100, 200, 18); txt(`INC  51.64°`, 100, 230, 18);
+    for (let i = 0; i < 9; i++) { const v = hash(i + Math.floor(t * 8) * 13); txt(`0x${(v * 0xffffff | 0).toString(16).toUpperCase().padStart(6, '0')}  ${'█'.repeat(1 + (v * 8 | 0))}`, 100, 300 + i * 24, 13, AMB2 + '.55)'); }
+    // right: radar
+    const rx = 1720, ry = 880, rr = 110; g.strokeStyle = AMB2 + '.5)'; g.lineWidth = 1; for (let k = 1; k <= 3; k++) { g.beginPath(); g.arc(rx, ry, rr * k / 3, 0, 6.3); g.stroke(); }
+    g.beginPath(); g.moveTo(rx - rr, ry); g.lineTo(rx + rr, ry); g.moveTo(rx, ry - rr); g.lineTo(rx, ry + rr); g.stroke();
+    const sa = t * 2.4; const sg = g.createConicGradient ? g.createConicGradient(sa, rx, ry) : null; if (sg) { sg.addColorStop(0, AMB2 + '.45)'); sg.addColorStop(0.12, AMB2 + '0)'); sg.addColorStop(1, AMB2 + '0)'); g.fillStyle = sg; g.beginPath(); g.arc(rx, ry, rr, 0, 6.3); g.fill(); }
+    for (let i = 0; i < 5; i++) { const a = hash(i) * 6.28, d = 30 + hash(i + 2) * 70; const fade = ((sa - a) % 6.283 + 6.283) % 6.283; g.fillStyle = i === 0 ? RED : TEAL; g.globalAlpha = boot * Math.max(0.15, 1 - fade / 4); g.beginPath(); g.arc(rx + Math.cos(a) * d, ry + Math.sin(a) * d, 4, 0, 6.3); g.fill(); }
+    g.globalAlpha = boot;
+    // right column bars
+    txt('SIGNAL', 1620, 150, 14, AMB, 'left', 700); for (let i = 0; i < 12; i++) { const h = 10 + 40 * Math.abs(Math.sin(t * 3 + i * 0.7)) * (0.5 + 0.5 * hash(i)); g.fillStyle = i > 9 ? RED : AMB; g.fillRect(1620 + i * 16, 220 - h, 10, h); }
+    // bottom status line
+    txt(t < 3.6 ? 'SCANNING ' + '.'.repeat(1 + Math.floor(t * 4) % 3) : t < city0 ? 'LOCKED · DESCENDING' : t < 7.6 ? 'GRID ACQUIRE' : 'TARGET CONFIRMED', 100, 1000, 18, t > 7.6 ? RED : AMB, 'left', 700);
+    txt(`T+${t.toFixed(2)}`, 1820, 1000, 16, AMB, 'right');
+    g.globalAlpha = 1;
+    { const ta = inv(6.5, 6.95, t); if (ta > 0) { const jit = ta < 1 ? (hash(Math.floor(t * 30)) - 0.5) * 30 * (1 - ta) : 0;
+      g.save(); g.fillStyle = 'rgba(3,3,4,.72)'; g.fillRect(90, 380, 760 * Math.min(1, ta * 1.5), 250); g.strokeStyle = AMB; g.lineWidth = 2; g.strokeRect(90, 380, 760 * Math.min(1, ta * 1.5), 250);
+      g.font = '900 120px "Noto Sans CJK SC"'; g.textBaseline = 'alphabetic'; g.textAlign = 'left'; g.letterSpacing = '12px';
+      g.globalAlpha = 0.7; g.fillStyle = '#ff4a3a'; g.fillText('轨道侦察', 130 + jit + 6, 530); g.fillStyle = '#3ef0d0'; g.fillText('轨道侦察', 130 - jit - 6, 530);
+      g.globalAlpha = 1; g.fillStyle = AMB; g.fillText('轨道侦察', 130 + jit * 0.3, 530); g.font = '700 30px Inter'; g.letterSpacing = '14px'; g.fillText('ORBITAL RECON · SAT-07', 136, 590);
+      g.fillStyle = 'rgba(0,0,0,.25)'; for (let y = 400; y < 620; y += 4) g.fillRect(100, y, 740, 1); g.restore(); } }
+    const glitch = Math.max(Math.exp(-Math.pow((t - 5.18) / 0.1, 2)), 0.5 * Math.exp(-Math.pow((t - 7.62) / 0.06, 2)), 0.6 * Math.exp(-Math.pow((t - 0.15) / 0.08, 2)));
+    post.render(t, { glitch, flick: 0.97 + 0.03 * Math.sin(t * 50) });
+  },
+});
+</script></body></html>

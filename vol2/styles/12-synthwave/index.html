@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>12 复古 Synthwave · Jet Jump</title>
+<script src="../../lib/core.js"></script><script src="../../lib/gl.js"></script>
+</head><body><div id="stage"></div>
+<script>
+/* ===== 12 复古 Synthwave · 午夜公路 =====
+   An OutRun-style pseudo-3D highway at midnight: a neon skyline and a ringed moon on the horizon, palms and
+   streetlights whipping past, a sports car from behind with its taillight bar painting the asphalt red.
+   On the downbeat the car hits boost (the hook): FOV stretch, light streaks, and a chrome title slams in.
+   The whole frame then goes through a VHS deck: bloom, chroma bleed, scanlines, tracking glitch. */
+const { E, clamp, inv, lerp, rng, hash, spring } = Reel;
+const stage = Reel.makeStage('#0a0016');
+/* JET JUMP: (A) chase cam: jets lit from frame 0, jump over a semi at 1.0 s, land 1.6 s.
+   (B) 2.1 s: the camera stops and slowly pushes in (telephoto) while the car drives on into the turn, climbs a
+   curved wall ramp past vertical, leaves the lip upside-down at 4.5 s (hook), jets fire in bursts to finish the
+   back-flip, and it lands flat at 5.8 s. Title at 6.4 s. */
+const C = Reel.cfg({ en: 'JET', en2: 'JUMP', zh: '喷气飞跃', tag: 'XIAOXIONG · 1986 · SIDE B' });
+const EV = { launch1: 1.0, land1: 1.6, stop: 2.1, junction: 3.0, turn: 3.15, rampIn: 3.7, lip: 4.5, land2: 5.8, title: 6.4 };
+const src = document.createElement('canvas'); src.width = Math.round(1920 * Reel.RS); src.height = Math.round(1080 * Reel.RS);
+const g = src.getContext('2d');
+const post = Reel.Post(stage, src, { bloom: 0.85, th: 0.55, ca: 3.0, scan: 0.14, vig: 0.5, grain: 0.06, tint: [1, 0.9, 1] });
+const HZ = 560;
+const R0 = rng(12);
+const SKY = Array.from({ length: 34 }, (_, i) => ({ x: i * 62 + R0() * 30, w: 40 + R0() * 70, h: 40 + R0() * 150, c: R0() < 0.5 }));
+const STARS = Array.from({ length: 200 }, (_, i) => [hash(i) * 1920, hash(i + 7) * 480, hash(i + 13)]);
+const vAt = (t) => 95 * (1 - 0.35 * E.inOutSine(inv(1.6, 3.0, t)));
+const DIST = []; { let d = 0; for (let i = 0; i <= 3000; i++) { DIST.push(d); d += vAt(i / 300) / 300; } }
+const dist = (t) => { const f = clamp(t, 0, 10) * 300, i = Math.floor(f); return lerp(DIST[i], DIST[Math.min(3000, i + 1)], f - i); };
+const curve = () => 0;
+const CAR_REL = 18.4; const TRUCK_Z = dist(1.3) + CAR_REL;
+function road(t, fov) {
+  const D = dist(t), cv = curve(t);
+  for (let y = HZ; y < 1080; y += 2) {
+    const p = (y - HZ) / (1080 - HZ); // 0 at horizon
+    const z = 1 / Math.max(p, 0.004); // pseudo depth
+    const cx = 960 + cv * Math.pow(1 - p, 2.2) * 700 - cv * 60;
+    const half = lerp(14, 820, Math.pow(p, 1.0)) * fov;
+    const seg = Math.floor((D * 0.5 + z * 6) / 4) % 2;
+    // ground
+    g.fillStyle = seg ? '#13021f' : '#1a0429'; g.fillRect(0, y, 1920, 2);
+    // grid lines on the ground (horizontal)
+    if (Math.floor((D * 0.5 + z * 6) * 1.0) % 8 === 0) { g.fillStyle = `rgba(255,60,200,${0.25 + p * 0.5})`; g.fillRect(0, y, 1920, 2); }
+    // road
+    g.fillStyle = seg ? '#1b1530' : '#211a3a'; g.fillRect(cx - half, y, half * 2, 2);
+    // neon edges
+    const ew = Math.max(1, half * 0.03); g.fillStyle = '#ff3fb4'; g.fillRect(cx - half - ew, y, ew, 2); g.fillStyle = '#35e8ff'; g.fillRect(cx + half, y, ew, 2);
+    // dashed lanes
+    if (seg) { const lw = Math.max(1, half * 0.012); g.fillStyle = 'rgba(255,240,220,.8)'; g.fillRect(cx - half * 0.33 - lw, y, lw * 2, 2); g.fillRect(cx + half * 0.33 - lw, y, lw * 2, 2); }
+  }
+  // vertical grid lines on the ground fanning from horizon
+  g.strokeStyle = 'rgba(255,60,200,.35)'; g.lineWidth = 1.5;
+  for (let k = -16; k <= 16; k++) { if (Math.abs(k) < 3) continue; g.beginPath(); g.moveTo(960 + k * 30 - cv * 60, HZ); g.lineTo(960 + k * 260 * fov - cv * 60, 1080); g.stroke(); }
+}
+function proj(t, wz, side, fov) { // world object at distance wz ahead, side -1/1 -> screen
+  const D = dist(t), rel = wz - D; if (rel <= 0.5) return null;
+  const p = clamp(12 / rel); const y = HZ + p * (1080 - HZ);
+  const cv = curve(t); const cx = 960 + cv * Math.pow(1 - p, 2.2) * 700 - cv * 60; const half = lerp(14, 820, p) * fov;
+  return { x: cx + side * half * 1.3, y, s: p * fov * 1.25 };
+}
+function palm(x, y, s) {
+  g.save(); g.translate(x, y); g.scale(s, s);
+  g.strokeStyle = '#090012'; g.lineWidth = 26; g.lineCap = 'round'; g.beginPath(); g.moveTo(0, 0); g.quadraticCurveTo(40, -300, 10, -620); g.stroke();
+  g.fillStyle = '#090012'; for (let k = 0; k < 7; k++) { const a = -Math.PI / 2 + (k - 3) * 0.48; g.beginPath(); g.moveTo(10, -620); g.quadraticCurveTo(10 + Math.cos(a) * 200, -620 + Math.sin(a) * 120 - 60, 10 + Math.cos(a) * 330, -620 + Math.sin(a) * 60 + 110); g.quadraticCurveTo(10 + Math.cos(a) * 180, -620 + Math.sin(a) * 90 - 10, 10, -606); g.fill(); }
+  g.restore();
+}
+function lamp(x, y, s, side) {
+  g.save(); g.translate(x, y); g.scale(s, s);
+  g.fillStyle = '#0c0018'; g.fillRect(-8, -560, 16, 560); g.fillRect(side > 0 ? -150 : -8, -560, 158, 12);
+  const lx = side > 0 ? -140 : 140; const gr = g.createRadialGradient(lx, -546, 2, lx, -546, 90); gr.addColorStop(0, 'rgba(255,220,255,1)'); gr.addColorStop(0.2, 'rgba(255,90,220,.7)'); gr.addColorStop(1, 'rgba(255,60,200,0)'); g.fillStyle = gr; g.fillRect(lx - 90, -636, 180, 180);
+  g.restore();
+}
+function chrome(text, x, y, size, a) {
+  g.save(); g.translate(x, y); g.scale(1, 1); g.rotate(-0.05); g.globalAlpha = a;
+  g.font = `italic 900 ${size}px "Inter Display"`; g.textAlign = 'center'; g.textBaseline = 'alphabetic';
+  const gr = g.createLinearGradient(0, -size * 0.8, 0, 0); gr.addColorStop(0, '#1a4fd6'); gr.addColorStop(0.3, '#9fd8ff'); gr.addColorStop(0.49, '#ffffff'); gr.addColorStop(0.51, '#3a1a10'); gr.addColorStop(0.75, '#d77a3a'); gr.addColorStop(1, '#ffe2b0');
+  g.lineWidth = 10; g.strokeStyle = '#0a0016'; g.strokeText(text, 0, 8); g.lineWidth = 4; g.strokeStyle = '#ffffff'; g.strokeText(text, 0, 0);
+  g.fillStyle = gr; g.fillText(text, 0, 0);
+  g.restore();
+}
+// ---------- cars ----------
+function jetFlame(x, y, L, w, rot) { g.save(); g.translate(x, y); g.rotate(rot); const fl = g.createRadialGradient(0, 0, 2, L * 0.4, 0, L); fl.addColorStop(0, 'rgba(255,255,255,1)'); fl.addColorStop(0.3, 'rgba(150,240,255,.9)'); fl.addColorStop(0.7, 'rgba(60,140,255,.45)'); fl.addColorStop(1, 'rgba(60,140,255,0)'); g.fillStyle = fl; g.beginPath(); g.ellipse(L * 0.45, 0, L * 0.55, w, 0, 0, 6.3); g.fill(); g.restore(); }
+function carRear(x, y, sc, t, jet, shadowA = 0.6, sq = 0) {
+  g.save(); g.translate(x, y); g.scale(sc * (1 + sq * 0.5), sc * (1 - sq));
+  const lg = g.createRadialGradient(0, 120, 20, 0, 140, 420); lg.addColorStop(0, `rgba(255,40,80,${0.55 * shadowA})`); lg.addColorStop(1, 'rgba(255,40,80,0)'); g.fillStyle = lg; g.fillRect(-460, 40, 920, 260);
+  g.fillStyle = 'rgba(7,3,12,.95)'; g.fillRect(-270, 30, 92, 82); g.fillRect(178, 30, 92, 82);
+  const bd = g.createLinearGradient(0, -150, 0, 100); bd.addColorStop(0, '#3a1a5a'); bd.addColorStop(0.45, '#1c0b30'); bd.addColorStop(1, '#0b0414'); g.fillStyle = bd;
+  g.beginPath(); g.moveTo(-290, 70); g.lineTo(-300, -10); g.lineTo(-250, -70); g.lineTo(-170, -88); g.lineTo(-120, -160); g.lineTo(120, -160); g.lineTo(170, -88); g.lineTo(250, -70); g.lineTo(300, -10); g.lineTo(290, 70); g.closePath(); g.fill();
+  const wg = g.createLinearGradient(0, -155, 0, -92); wg.addColorStop(0, '#ff7ad9'); wg.addColorStop(0.6, '#5a1f7a'); wg.addColorStop(1, '#14061f'); g.fillStyle = wg; g.beginPath(); g.moveTo(-108, -150); g.lineTo(108, -150); g.lineTo(150, -94); g.lineTo(-150, -94); g.closePath(); g.fill();
+  g.strokeStyle = 'rgba(255,170,240,.7)'; g.lineWidth = 3; g.beginPath(); g.moveTo(-250, -70); g.lineTo(-170, -88); g.lineTo(170, -88); g.lineTo(250, -70); g.stroke();
+  g.fillStyle = '#12061e'; g.fillRect(-270, -98, 540, 14);
+  const tl = g.createLinearGradient(-260, 0, 260, 0); tl.addColorStop(0, '#ff1f4b'); tl.addColorStop(0.5, '#ff6a7f'); tl.addColorStop(1, '#ff1f4b'); g.fillStyle = tl; g.fillRect(-262, -40, 524, 22); g.fillStyle = '#fff1f4'; g.fillRect(-262, -33, 524, 5);
+  g.fillStyle = '#e8e0ff'; g.fillRect(-80, 8, 160, 40); g.fillStyle = '#1a0a2a'; g.font = '800 24px Inter'; g.textAlign = 'center'; g.fillText('XIAO 86', 0, 36);
+  for (const ex of [-200, 200]) { g.fillStyle = '#2a2236'; g.beginPath(); g.ellipse(ex, 70, 20, 13, 0, 0, 6.3); g.fill();
+    if (jet > 0.02) { const L = (110 + 50 * Math.sin(t * 50 + ex)) * jet; jetFlame(ex, 74, L, 22 + 10 * jet, Math.PI / 2); } }
+  g.restore();
+}
+// side profile, facing +x; origin = between the wheels on the ground
+function carSide(x, y, sc, rot, t, jet) {
+  g.save(); g.translate(x, y); g.rotate(rot); g.scale(sc, sc);
+  if (jet > 0.02) { const L = (150 + 60 * Math.sin(t * 47)) * jet; jetFlame(-160, -44, L, 26, Math.PI); jetFlame(-150, -20, L * 0.7, 18, Math.PI + 0.25); }
+  const bd = g.createLinearGradient(0, -110, 0, -10); bd.addColorStop(0, '#5a2a8a'); bd.addColorStop(0.5, '#2a1046'); bd.addColorStop(1, '#0e0518'); g.fillStyle = bd;
+  g.beginPath(); g.moveTo(-165, -22); g.lineTo(-170, -62); g.lineTo(-120, -78); g.lineTo(-60, -112); g.lineTo(40, -112); g.lineTo(110, -78); g.lineTo(168, -60); g.lineTo(172, -26); g.closePath(); g.fill();
+  g.fillStyle = '#ff7ad9'; g.globalAlpha = 0.85; g.beginPath(); g.moveTo(-52, -104); g.lineTo(34, -104); g.lineTo(92, -78); g.lineTo(-100, -78); g.closePath(); g.fill(); g.globalAlpha = 1;
+  g.strokeStyle = 'rgba(255,170,240,.8)'; g.lineWidth = 3; g.beginPath(); g.moveTo(-170, -62); g.lineTo(-120, -78); g.lineTo(110, -78); g.lineTo(168, -60); g.stroke();
+  g.fillStyle = '#ff1f4b'; g.fillRect(-172, -62, 12, 18); g.fillStyle = '#e8f8ff'; g.fillRect(162, -58, 12, 12);
+  const hl = g.createRadialGradient(176, -52, 2, 176, -52, 80); hl.addColorStop(0, 'rgba(220,250,255,.8)'); hl.addColorStop(1, 'rgba(220,250,255,0)'); g.fillStyle = hl; g.fillRect(170, -120, 90, 140);
+  for (const wx of [-108, 108]) { g.fillStyle = '#07030c'; g.beginPath(); g.arc(wx, -24, 26, 0, 6.3); g.fill(); g.strokeStyle = '#35e8ff'; g.lineWidth = 3; g.beginPath(); g.arc(wx, -24, 15, 0, 6.3); g.stroke(); }
+  g.restore();
+}
+// ---------- phase A props ----------
+function truck(tc) {
+  const p = proj(tc, TRUCK_Z, 0, 1); if (!p || p.s < 0.02) return; const s = p.s, w = 1500 * s, h = 270 * s, x = p.x, y = p.y;
+  g.fillStyle = 'rgba(0,0,0,.55)'; g.fillRect(x - w / 2, y - 10 * s, w, 20 * s);
+  const tg = g.createLinearGradient(0, y - h, 0, y); tg.addColorStop(0, '#2c2640'); tg.addColorStop(1, '#151023'); g.fillStyle = tg; g.fillRect(x - w / 2, y - h - 60 * s, w, h);
+  g.strokeStyle = 'rgba(160,140,200,.35)'; g.lineWidth = 2 * s; for (let k = 1; k < 8; k++) { g.beginPath(); g.moveTo(x - w / 2 + k * w / 8, y - h - 60 * s); g.lineTo(x - w / 2 + k * w / 8, y - 60 * s); g.stroke(); }
+  g.fillStyle = '#ff2a45'; g.fillRect(x - w / 2, y - 66 * s, w, 8 * s);
+  for (const wx of [-0.38, -0.28, 0.3, 0.4]) { g.fillStyle = '#05010a'; g.beginPath(); g.arc(x + wx * w, y - 40 * s, 55 * s, 0, 6.3); g.fill(); }
+  const blink = Math.floor(tc * 4) % 2 ? 1 : 0.4;
+  for (let k = 0; k < 9; k++) { const lx = x - w / 2 + (k + 0.5) * w / 9; const gl = g.createRadialGradient(lx, y - h - 60 * s, 1, lx, y - h - 60 * s, 30 * s); gl.addColorStop(0, `rgba(255,40,60,${blink})`); gl.addColorStop(1, 'rgba(255,40,60,0)'); g.fillStyle = gl; g.fillRect(lx - 30 * s, y - h - 90 * s, 60 * s, 60 * s); }
+}
+function kicker(tc) {
+  const a = proj(tc, TRUCK_Z - 30, 0, 1), b = proj(tc, TRUCK_Z - 20, 0, 1); if (!a || !b) return;
+  const wa = 420 * a.s, wb = 420 * b.s, hb = 120 * b.s;
+  g.fillStyle = '#2b2346'; g.beginPath(); g.moveTo(a.x - wa, a.y); g.lineTo(a.x + wa, a.y); g.lineTo(b.x + wb, b.y - hb); g.lineTo(b.x - wb, b.y - hb); g.closePath(); g.fill();
+  g.strokeStyle = '#35e8ff'; g.lineWidth = Math.max(1, 6 * b.s); g.beginPath(); g.moveTo(a.x - wa, a.y); g.lineTo(b.x - wb, b.y - hb); g.moveTo(a.x + wa, a.y); g.lineTo(b.x + wb, b.y - hb); g.stroke();
+}
+// ---------- phase B stage (coordinates of the frozen 2.1 s frame) ----------
+const JY = 664, JX = 960;                    // junction where the road meets the cross road
+const RX = 1110, RR = 170, RCY = JY - RR, PHI_END = 125 * Math.PI / 180;
+const LIP = [RX + RR * Math.sin(PHI_END), RCY + RR * Math.cos(PHI_END)];
+const DIR = [Math.cos(PHI_END), -Math.sin(PHI_END)];
+const CTRL = [LIP[0] + DIR[0] * 140, LIP[1] + DIR[1] * 140], LAND = [1000, JY];
+const bez = (u) => [(1 - u) * (1 - u) * LIP[0] + 2 * u * (1 - u) * CTRL[0] + u * u * LAND[0], (1 - u) * (1 - u) * LIP[1] + 2 * u * (1 - u) * CTRL[1] + u * u * LAND[1]];
+function crossRoad(a) {
+  g.globalAlpha = a; g.fillStyle = '#1e1734'; g.fillRect(JX - 60, JY - 8, 1100, 18); g.fillStyle = '#35e8ff'; g.fillRect(JX - 60, JY + 9, 1100, 2); g.fillStyle = '#ff3fb4'; g.fillRect(JX + 40, JY - 9, 1100, 2);
+  // the curved wall ramp (past vertical), Tesla-demo style: pale deck, red edge lights, truss behind
+  g.strokeStyle = '#3b2e5a'; g.lineWidth = 3; for (let k = 0; k <= 6; k++) { const ph = k / 6 * PHI_END, px = RX + RR * Math.sin(ph) + 10, py = RCY + RR * Math.cos(ph) - 6; g.beginPath(); g.moveTo(px, py); g.lineTo(px + 20, JY); g.stroke(); }
+  // wall body: filled band between the riding surface and its outer skin
+  g.fillStyle = '#2a2342'; g.beginPath(); g.moveTo(RX - 60, JY + 2); for (let k = 0; k <= 40; k++) { const ph = k / 40 * PHI_END; g.lineTo(RX + (RR + 2) * Math.sin(ph), RCY + (RR + 2) * Math.cos(ph)); } for (let k = 40; k >= 0; k--) { const ph = k / 40 * PHI_END; g.lineTo(RX + (RR + 34) * Math.sin(ph), RCY + (RR + 34) * Math.cos(ph) + 4); } g.closePath(); g.fill();
+  g.lineCap = 'round'; g.strokeStyle = '#8f86b0'; g.lineWidth = 6; g.beginPath(); g.moveTo(RX - 60, JY); for (let k = 0; k <= 40; k++) { const ph = k / 40 * PHI_END; g.lineTo(RX + (RR + 3) * Math.sin(ph), RCY + (RR + 3) * Math.cos(ph)); } g.stroke();
+  g.strokeStyle = 'rgba(255,255,255,.35)'; g.lineWidth = 1.5; g.setLineDash([8, 10]); g.beginPath(); for (let k = 0; k <= 40; k++) { const ph = k / 40 * PHI_END; const px = RX + (RR + 18) * Math.sin(ph), py = RCY + (RR + 18) * Math.cos(ph); k ? g.lineTo(px, py) : g.moveTo(px, py); } g.stroke(); g.setLineDash([]);
+  g.strokeStyle = '#ff2a45'; g.lineWidth = 2.5; g.beginPath(); for (let k = 0; k <= 40; k++) { const ph = k / 40 * PHI_END; const px = RX + (RR + 34) * Math.sin(ph), py = RCY + (RR + 34) * Math.cos(ph) + 4; k ? g.lineTo(px, py) : g.moveTo(px, py); } g.stroke();
+  g.globalAlpha = 1;
+}
+function stageCar(t) {
+  // returns drawing of the car during phase B
+  const D0 = dist(EV.stop);
+  if (t < EV.turn) { // driving away down the main road, rear view
+    const u = E.inOutSine(clamp((t - EV.stop) / (EV.junction - EV.stop))); const rel = lerp(CAR_REL, 64, u); const p = 12 / rel; const y = HZ + p * (1080 - HZ) + 40 * p; const sc = p * 1.25 * 0.55 / 0.65 * 0.65 / 0.55;
+    const squeeze = t > EV.junction ? 1 - clamp((t - EV.junction) / (EV.turn - EV.junction)) : 1;
+    g.save(); g.translate(JX, y); g.scale(squeeze, 1); g.translate(-JX, -y); carRear(JX, y - 40 * p, p * 0.98, t, 0.8, 0.6); g.restore(); return; }
+  const SC = 0.5; let x, y, rot = 0, jet = 0.5;
+  if (t < EV.rampIn) { const u = E.inQuad(clamp((t - EV.turn) / (EV.rampIn - EV.turn))); x = lerp(JX, RX, u); y = JY; const grow = clamp((t - EV.turn) / 0.12); g.save(); g.translate(x, y); g.scale(grow, 1); g.translate(-x, -y); carSide(x, y, SC, 0, t, 0.7); g.restore(); return; }
+  if (t < EV.lip) { const u = E.inQuad(clamp((t - EV.rampIn) / (EV.lip - EV.rampIn))); const ph = u * PHI_END; x = RX + RR * Math.sin(ph); y = RCY + RR * Math.cos(ph); rot = -ph; jet = 1; carSide(x, y, SC, rot, t, jet); return; }
+  if (t < EV.land2) { const u = clamp((t - EV.lip) / (EV.land2 - EV.lip)); const [bx, by] = bez(E.inOutSine(u) * 0.6 + u * 0.4);
+    // unbalanced spin, corrected by three jet bursts
+    const target = PHI_END + (2 * Math.PI - PHI_END) * E.inOutCubic(u); const wob = 0.35 * Math.sin(u * 14) * (1 - u) * (1 - u);
+    const burst = Math.max(...[4.75, 5.1, 5.45].map((b) => Math.exp(-Math.pow((t - b) / 0.06, 2))));
+    carSide(bx, by, SC, -(target + wob), t, 0.25 + burst); return; }
+  const a = t - EV.land2; const sq = 0.1 * Math.exp(-a * 8) * Math.cos(a * 30); const xr = LAND[0] - 30 * E.outCubic(clamp(a / 0.6));
+  g.save(); g.translate(xr, JY); g.scale(1 + sq * 0.4, 1 - sq); g.translate(-xr, -JY); carSide(xr, JY, SC, 0, t, a < 0.4 ? 0.6 * (1 - a / 0.4) : 0); g.restore();
+}
+function puffs(cx, cy, t0, t, n, spread, rmax, alpha) { const a = t - t0; if (a < 0 || a > 3) return; for (let i = 0; i < n; i++) { const an = (hash(i + t0 * 7) - 0.5) * Math.PI * 1.2, d = spread * (0.3 + hash(i + 3) * 0.7) * (1 - Math.exp(-a * 3));
+  g.fillStyle = `rgba(210,195,245,${alpha * Math.max(0, 1 - a / 2.2)})`; g.beginPath(); g.arc(cx + Math.sin(an) * d * 1.5, cy - Math.abs(Math.cos(an)) * d * 0.3, rmax * (0.4 + 0.6 * hash(i + 5)) * (0.5 + a), 0, 6.3); g.fill(); } }
+function sparks(cx, cy, t0, t, scale) { const a = t - t0; if (a < 0 || a > 0.6) return; for (let i = 0; i < 50; i++) { const an = Math.PI + hash(i * 3) * Math.PI, v = (500 + hash(i + 1) * 800) * scale; const x = cx + Math.cos(an) * v * a, y = cy + Math.sin(an) * v * a * 0.4 + 800 * scale * a * a; g.strokeStyle = `rgba(255,${200 + hash(i) * 55 | 0},120,${1 - a / 0.6})`; g.lineWidth = 3 * scale; g.beginPath(); g.moveTo(x, y); g.lineTo(x - Math.cos(an) * 24 * scale, y - Math.sin(an) * 8 * scale); g.stroke(); } }
+function backdrop(tc, t) {
+  const sk = g.createLinearGradient(0, 0, 0, HZ); sk.addColorStop(0, '#07001a'); sk.addColorStop(0.55, '#2a0646'); sk.addColorStop(0.85, '#8a1673'); sk.addColorStop(1, '#ff5aa0'); g.fillStyle = sk; g.fillRect(-400, -600, 2720, HZ + 600);
+  for (const [x, y, b] of STARS) { g.fillStyle = `rgba(255,230,255,${0.2 + 0.6 * b * (0.6 + 0.4 * Math.sin(t * 3 + x))})`; g.fillRect(x, y, 2, 2); }
+  const mx = 470, my = 240; const mg = g.createRadialGradient(mx - 40, my - 50, 10, mx, my, 150); mg.addColorStop(0, '#f2a6d8'); mg.addColorStop(0.6, '#c2468f'); mg.addColorStop(1, '#4a1660'); g.fillStyle = mg; g.beginPath(); g.arc(mx, my, 140, 0, 6.3); g.fill();
+  g.save(); g.translate(mx, my); g.rotate(-0.35); g.strokeStyle = 'rgba(120,240,255,.85)'; g.lineWidth = 8; g.beginPath(); g.ellipse(0, 0, 270, 46, 0, 0.15, Math.PI - 0.15); g.stroke(); g.restore();
+  for (const b of SKY) { const x = b.x - 60; g.fillStyle = '#12002a'; g.fillRect(x, HZ - b.h, b.w, b.h);
+    for (let wy = HZ - b.h + 10; wy < HZ - 6; wy += 14) for (let wx = x + 6; wx < x + b.w - 6; wx += 12) if (hash(wx * 3.1 + wy * 7.7) > 0.72) { g.fillStyle = b.c ? 'rgba(255,90,220,.9)' : 'rgba(80,230,255,.9)'; g.fillRect(wx, wy, 5, 7); } }
+  const hg = g.createLinearGradient(0, HZ - 60, 0, HZ + 10); hg.addColorStop(0, 'rgba(255,90,180,0)'); hg.addColorStop(1, 'rgba(255,90,180,.55)'); g.fillStyle = hg; g.fillRect(-400, HZ - 60, 2720, 70);
+  g.fillStyle = '#13021f'; g.fillRect(-400, 1080, 2720, 400);
+  road(tc, 1);
+  const D = dist(tc); const objs = [];
+  for (let k = Math.floor(D / 20) - 1; k < Math.floor(D / 20) + 14; k++) { const wz = k * 20; objs.push({ wz, side: -1, kind: k % 2 ? 'palm' : 'lamp' }); objs.push({ wz: wz + 10, side: 1, kind: k % 2 ? 'lamp' : 'palm' }); }
+  objs.sort((a, b) => b.wz - a.wz).forEach((o) => { const p = proj(tc, o.wz, o.side, 1); if (!p || p.s < 0.02) return; o.kind === 'palm' ? palm(p.x, p.y, p.s * 0.9) : lamp(p.x, p.y, p.s, o.side); });
+}
+function telemetry(t) {
+  const kmh = Math.round(t < EV.stop ? vAt(t) * 2.2 : t < EV.lip ? lerp(140, 230, clamp((t - EV.stop) / 2.4)) : t < EV.land2 ? 230 : lerp(230, 0, clamp((t - EV.land2) / 1.2)));
+  const gee = t > EV.land1 && t < EV.land1 + 0.25 ? 3.8 : t > EV.rampIn && t < EV.lip ? 3.1 : t > EV.land2 && t < EV.land2 + 0.3 ? 4.6 : (t > EV.launch1 && t < EV.land1) || (t > EV.lip && t < EV.land2) ? 0.0 : 0.4;
+  const gauge = (x, val, unit, frac, col) => { g.save(); g.strokeStyle = 'rgba(255,255,255,.18)'; g.lineWidth = 6; g.beginPath(); g.arc(x, 950, 62, 0.75 * Math.PI, 2.25 * Math.PI); g.stroke(); g.strokeStyle = col; g.beginPath(); g.arc(x, 950, 62, 0.75 * Math.PI, 0.75 * Math.PI + 1.5 * Math.PI * clamp(frac)); g.stroke();
+    g.fillStyle = '#fff'; g.font = '800 34px Inter'; g.textAlign = 'center'; g.fillText(val, x, 960); g.font = '700 14px Inter'; g.fillStyle = 'rgba(255,255,255,.6)'; g.fillText(unit, x, 990); g.restore(); };
+  gauge(170, String(kmh), 'KM/H', kmh / 320, '#35e8ff'); gauge(1750, gee.toFixed(1), 'G', gee / 5, '#ff3fb4');
+  const air = (t > EV.launch1 && t < EV.land1) || (t > EV.lip && t < EV.land2);
+  if (air) { g.save(); g.font = '800 26px Inter'; g.fillStyle = '#35e8ff'; g.textAlign = 'center'; g.fillText(t < EV.stop ? 'AIRBORNE' : 'ATTITUDE CONTROL · RCS', 960, 150); g.restore(); }
+}
+Reel.scene({
+  duration: 10, fps: 30,
+  fonts: ['italic 900 160px "Inter Display"', '900 110px "Noto Sans CJK SC"', '700 22px Inter', '800 24px Inter', '800 34px Inter', '800 26px Inter'],
+  cues: [{ t: 0.03, sfx: 'whoosh_up', gain: 0.7 }, { t: 0.05, sfx: 'vhs', gain: 0.6 }, { t: 0.5, sfx: 'beep', gain: 0.4 }, { t: EV.launch1, sfx: 'whoosh_up', gain: 0.9 }, { t: EV.land1, sfx: 'impact', gain: 0.9 }, { t: EV.land1, sfx: 'thud', gain: 0.7 },
+    { t: EV.stop, sfx: 'whoosh', gain: 0.5 }, { t: EV.turn, sfx: 'sizzle', gain: 0.4 }, { t: EV.rampIn, sfx: 'riser_short', gain: 0.7 }, { t: EV.lip, sfx: 'whoosh_up', gain: 1.0 }, { t: EV.lip, sfx: 'impact', gain: 0.6 },
+    { t: 4.75, sfx: 'pop', gain: 0.6 }, { t: 5.1, sfx: 'pop', gain: 0.6 }, { t: 5.45, sfx: 'pop', gain: 0.6 }, { t: EV.land2, sfx: 'impact', gain: 1.0 }, { t: EV.land2, sfx: 'thud', gain: 0.9 },
+    { t: EV.title, sfx: 'impact', gain: 0.7 }, { t: EV.title + 0.02, sfx: 'glitch', gain: 0.5 }, { t: EV.title + 0.3, sfx: 'neon', gain: 0.7 }],
+  render(t) {
+    g.setTransform(Reel.RS, 0, 0, Reel.RS, 0, 0);
+    if (t < EV.stop) {
+      // ---- phase A: chase cam, jump over the truck ----
+      const air = t > EV.launch1 && t < EV.land1 ? Math.sin(Math.PI * (t - EV.launch1) / (EV.land1 - EV.launch1)) : 0;
+      const shake = t > EV.land1 && t < EV.land1 + 0.2 ? Math.sin(t * 90) * 12 * (1 - (t - EV.land1) / 0.2) : 0;
+      g.save(); g.translate(shake, air * 120);
+      backdrop(t, t); if (TRUCK_Z - dist(t) > 2) { kicker(t); truck(t); }
+      g.restore();
+      // turn ahead fades in after the landing
+      const fa = clamp((t - EV.land1 - 0.3) / 0.3); if (fa > 0) crossRoad(fa);
+      const sq = t > EV.land1 ? 0.12 * Math.exp(-(t - EV.land1) * 9) * Math.cos((t - EV.land1) * 30) : 0;
+      if (t > EV.land1) { puffs(960, 1000, EV.land1, t, 14, 520, 110, 0.18); sparks(960, 1000, EV.land1, t, 1); }
+      for (let i = 0; i < 24; i++) { const b = i * 0.08, a = t - b; if (a < 0 || a > 1.2) continue; const side = i % 2 ? 1 : -1; g.fillStyle = `rgba(210,195,245,${0.14 * (1 - a / 1.2)})`; g.beginPath(); g.arc(960 + side * (210 + a * 280), 990 + a * 140, 30 + a * 200, 0, 6.3); g.fill(); }
+      carRear(960, 900 - air * 330, 1 - air * 0.12, t, 1, 1 - air, sq);
+    } else {
+      // ---- phase B: camera stops, slow telephoto push on the stunt ----
+      const k = E.inOutCubic(clamp((t - EV.stop) / 1.6)); const Z = lerp(1, 2.35, k) * (1 + 0.05 * E.inOutSine(clamp((t - 4) / 6))), fx = lerp(960, 1110, k), fy = lerp(560, 482, k);
+      const shake = t > EV.land2 && t < EV.land2 + 0.25 ? Math.sin(t * 90) * 10 * (1 - (t - EV.land2) / 0.25) : 0;
+      g.save(); g.translate(960 + shake, 540); g.scale(Z, Z); g.translate(-fx, -fy);
+      backdrop(EV.stop, t); crossRoad(1);
+      if (t > EV.land1) puffs(960, 1000, EV.land1, t, 14, 520, 110, 0.18);
+      // jet smoke trail along the ramp and the flight
+      for (let i = 0; i < 40; i++) { const b = EV.rampIn + i * 0.06; const a = t - b; if (a < 0 || a > 1.6 || b > EV.land2) continue; let px, py; if (b < EV.lip) { const ph = E.inQuad(clamp((b - EV.rampIn) / (EV.lip - EV.rampIn))) * PHI_END; px = RX + (RR - 20) * Math.sin(ph) - 50 * Math.cos(ph); py = RCY + (RR - 20) * Math.cos(ph) + 50 * Math.sin(ph); } else { [px, py] = bez(clamp((b - EV.lip) / (EV.land2 - EV.lip))); }
+        g.fillStyle = `rgba(210,195,245,${0.16 * (1 - a / 1.6)})`; g.beginPath(); g.arc(px - a * 20, py + a * 10, 10 + a * 45, 0, 6.3); g.fill(); }
+      stageCar(t);
+      if (t > EV.land2) { puffs(LAND[0], JY, EV.land2, t, 16, 160, 40, 0.24); sparks(LAND[0], JY, EV.land2, t, 0.35); }
+      g.restore();
+    }
+    telemetry(t);
+    // titles (screen space, left side so the stunt stays clear)
+    const s1 = spring(t - EV.title, { k: 320, c: 16 }), s2 = spring(t - EV.title - 0.2, { k: 320, c: 16 });
+    if (t > EV.title) { chrome(C.en, 420, 300, 170 * (2 - Math.min(1, s1)), Math.min(1, s1 * 2)); chrome(C.en2, 520, 440, 150 * (2 - Math.min(1, s2)), t > EV.title + 0.2 ? Math.min(1, s2 * 2) : 0); }
+    if (t > EV.title + 0.3) { const a = E.outCubic(inv(EV.title + 0.3, EV.title + 0.6, t)) * (0.85 + 0.15 * Math.sin(t * 40) * (t < 7.2 ? 1 : 0.1));
+      g.save(); g.translate(440, 590); g.rotate(-0.05); g.transform(1, 0, -0.25, 1, 0, 0); g.globalAlpha = a; g.font = '900 110px "Noto Sans CJK SC"'; g.textAlign = 'center';
+      g.shadowColor = '#ff2fb0'; g.shadowBlur = 30; g.strokeStyle = '#ff7ad9'; g.lineWidth = 6; g.strokeText(C.zh, 0, 0); g.shadowBlur = 0; g.strokeStyle = '#fff0fb'; g.lineWidth = 2; g.strokeText(C.zh, 0, 0); g.restore(); }
+    g.font = '700 22px Inter'; g.fillStyle = 'rgba(255,255,255,.85)'; g.textAlign = 'left'; g.fillText(t < EV.stop ? '▶ PLAY' : '▶ PLAY  ·  CAM 2', 80, 90); g.textAlign = 'right';
+    const tc = `0${Math.floor(t / 60)}:${String(Math.floor(t + 12) % 60).padStart(2, '0')}:${String(Math.floor(t * 30) % 30).padStart(2, '0')}`; g.fillText('SP  ' + tc, 1840, 90);
+    g.textAlign = 'left'; g.fillStyle = 'rgba(255,255,255,.6)'; g.fillText(C.tag, 80, 1040);
+    const band = ((t * 0.3) % 1.4) * 1080 - 100; g.fillStyle = 'rgba(255,255,255,.05)'; g.fillRect(0, band, 1920, 24);
+    const glitch = Math.max(0.6 * Math.exp(-Math.pow((t - EV.stop) / 0.05, 2)), 0.5 * Math.exp(-Math.pow((t - EV.land2) / 0.06, 2)), 0.5 * Math.exp(-Math.pow((t - EV.title) / 0.06, 2)), 0.4 * Math.exp(-Math.pow((t - 0.05) / 0.08, 2)));
+    post.render(t, { glitch, flick: 0.97 + 0.03 * Math.sin(t * 60) });
+  },
+});
+</script></body></html>

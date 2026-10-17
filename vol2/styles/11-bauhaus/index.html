@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>11 几何构成 包豪斯 · On the Beat</title>
+<script src="../../lib/core.js"></script>
+</head><body><div id="stage"></div>
+<script>
+/* ===== 11 几何构成 · 包豪斯 · 节拍海报 =====
+   A riso-printed Bauhaus poster that assembles itself on a 120 BPM grid: a red disc rolls in, a black bar
+   slams down, a yellow half-disc swings open, a blue square drops and turns. On the downbeat at 5 s every piece
+   leaps to a second composition at once (the hook). Inks multiply, plates are slightly misregistered,
+   and riso grain eats into every solid. */
+const { E, clamp, inv, lerp, rng, hash, spring } = Reel;
+const stage = Reel.makeStage('#ece5d6');
+const C = Reel.cfg({ t1: '秩序', t2: '节奏', t3: '构成', en: 'BAUHAUS · ON THE BEAT · 120 BPM', no: 'No.11', sign: 'XIAOXIONG' });
+const out = Reel.canvas2d(stage); const g = out.ctx;
+const k = Reel.RS, Wp = Math.round(1920 * k), Hp = Math.round(1080 * k);
+const mk = () => { const c = document.createElement('canvas'); c.width = Wp; c.height = Hp; return c; };
+const INK = mk(), ix = INK.getContext('2d');
+let PAPER, GRAIN;
+const COL = { red: '#d4372b', yel: '#f0b323', blu: '#1f4aa8', blk: '#1a1918' };
+const REG = { red: [1.8, -1.2], yel: [-1.4, 1.6], blu: [1.2, 1.4], blk: [0, 0] }; // plate misregistration (px)
+function makePaper() {
+  const c = mk(), x = c.getContext('2d', { willReadFrequently: true }); x.scale(k, k);
+  x.fillStyle = '#ece5d6'; x.fillRect(0, 0, 1920, 1080); const r = rng(4);
+  for (let i = 0; i < 16000; i++) { x.fillStyle = `rgba(${r() < 0.5 ? '120,100,70' : '255,255,255'},${0.03 + r() * 0.05})`; x.fillRect(r() * 1920, r() * 1080, 1 + r() * 1.6, 1 + r() * 1.6); }
+  for (let i = 0; i < 900; i++) { x.strokeStyle = `rgba(150,130,100,${0.05 + r() * 0.06})`; x.lineWidth = 0.6; const px = r() * 1920, py = r() * 1080, a = r() * 6.3; x.beginPath(); x.moveTo(px, py); x.lineTo(px + Math.cos(a) * 14, py + Math.sin(a) * 14); x.stroke(); }
+  return c;
+}
+function makeGrain() { // speckle mask: dots where the riso drum skipped ink
+  const c = mk(), x = c.getContext('2d', { willReadFrequently: true }); const r = rng(8);
+  const id = x.createImageData(Wp, Hp), d = id.data;
+  for (let i = 0; i < d.length; i += 4) { const v = r(); const px = (i / 4) % Wp, py = Math.floor(i / 4 / Wp); const n = Reel.noise2(px * 0.02, py * 0.02); d[i + 3] = v < 0.07 + 0.06 * n ? 200 : v < 0.12 ? 60 : 0; }
+  x.putImageData(id, 0, 0); return c;
+}
+// element states: A (first poster) and B (second poster)
+const EL = [
+  { kind: 'circle', col: 'red', A: [610, 600, 0, 1], B: [1330, 400, 0, 1], r: 230, enter: 0.25, from: [-500, 600] },
+  { kind: 'bar', col: 'blk', A: [1040, 540, 0, 1], B: [1250, 960, Math.PI / 2, 1], w: 64, h: 820, enter: 0.75, from: [1040, -700] },
+  { kind: 'half', col: 'yel', A: [1380, 760, 0, 1], B: [1000, 560, -Math.PI / 2, 1], r: 210, enter: 1.25 },
+  { kind: 'square', col: 'blu', A: [1450, 320, 0, 1], B: [640, 900, Math.PI / 4, 1], s: 250, enter: 1.75, from: [1450, -400] },
+  { kind: 'dots', col: 'blk', A: [330, 250, 0, 1], B: [1560, 760, 0, 1], enter: 2.25 },
+  { kind: 'line', col: 'red', A: [560, 560, -0.85, 1], B: [1100, 560, 0.62, 1], len: 1100, enter: 2.75 },
+  { kind: 'tri', col: 'blk', A: [320, 860, 0, 1], B: [1620, 250, Math.PI, 1], s: 200, enter: 3.25, from: [-300, 860] },
+  { kind: 'ring', col: 'blu', A: [1640, 860, 0, 1], B: [1180, 230, 0, 1], r: 90, enter: 3.75 },
+];
+const SWAP = 5.0;
+function pose(e, i, t) {
+  const st = spring(t - SWAP - i * 0.035, { k: 190, c: 15 });
+  const p = e.A.map((a, j) => lerp(a, e.B[j], t > SWAP ? st : 0));
+  // arc the jump a little
+  if (t > SWAP && st < 1.05) p[1] -= Math.sin(clamp(st) * Math.PI) * 120 * (i % 2 ? 1 : -1) * 0.6;
+  const en = spring(t - e.enter, { k: 220, c: 16 });
+  return { p, en, raw: t - e.enter };
+}
+function drawEl(x, e, i, t) {
+  const { p, en, raw } = pose(e, i, t); if (raw < 0) return;
+  const [px, py, rot] = p; const [ox, oy] = REG[e.col];
+  x.save(); x.translate(px + ox, py + oy); x.rotate(rot); x.fillStyle = COL[e.col]; x.strokeStyle = COL[e.col];
+  const beat = Math.exp(-Math.pow(((t + 0.0) % 0.5) / 0.06, 2)) * (t > 4 ? 1 : 0);
+  if (e.kind === 'circle') { // rolls in from the left
+    const fx = lerp(e.from[0] - px, 0, en); x.translate(fx, 0); x.rotate(-fx / e.r); const s = 1 + beat * 0.03; x.scale(s, s);
+    x.beginPath(); x.arc(0, 0, e.r, 0, 6.3); x.fill();
+    x.globalCompositeOperation = 'destination-out'; x.beginPath(); x.moveTo(0, 0); x.arc(0, 0, e.r * 0.62, -1.57, 0); x.fill(); x.globalCompositeOperation = 'source-over'; }
+  if (e.kind === 'bar') { const h = e.h * clamp(en * 1.05); x.fillRect(-e.w / 2, -e.h / 2, e.w, h); }
+  if (e.kind === 'half') { const a = Math.PI * clamp(en); x.beginPath(); x.moveTo(0, 0); x.arc(0, 0, e.r, Math.PI, Math.PI + a); x.closePath(); x.fill(); }
+  if (e.kind === 'square') { const dy = lerp(e.from[1] - py, 0, en); x.translate(0, dy); x.rotate((1 - clamp(en)) * 1.2); x.fillRect(-e.s / 2, -e.s / 2, e.s, e.s); }
+  if (e.kind === 'dots') { for (let a = 0; a < 3; a++) for (let b = 0; b < 3; b++) { const s = spring(raw - (a + b) * 0.06, { k: 300, c: 14 }); x.beginPath(); x.arc((a - 1) * 70, (b - 1) * 70, 24 * s, 0, 6.3); x.fill(); } }
+  if (e.kind === 'line') { const L = e.len * E.outCubic(clamp(raw / 0.45)); x.fillRect(-e.len / 2, -5, L, 10); }
+  if (e.kind === 'tri') { const fx = lerp(e.from[0] - px, 0, en); x.translate(fx, 0); x.beginPath(); x.moveTo(0, -e.s * 0.6); x.lineTo(e.s * 0.55, e.s * 0.4); x.lineTo(-e.s * 0.55, e.s * 0.4); x.closePath(); x.fill(); }
+  if (e.kind === 'ring') { x.lineWidth = 26; x.beginPath(); x.arc(0, 0, e.r * clamp(en), 0, 6.3 * clamp(raw / 0.4)); x.stroke(); }
+  x.restore();
+}
+Reel.scene({
+  duration: 10, fps: 30,
+  fonts: ['900 150px "Noto Sans CJK SC"', '700 20px Inter', '800 46px "Inter Display"'],
+  async setup() { PAPER = makePaper(); GRAIN = makeGrain(); },
+  cues: [...EL.map((e, i) => ({ t: e.enter, sfx: ['roll', 'thud', 'whoosh', 'block', 'pop', 'scribble', 'whoosh', 'pop'][i], gain: 0.7 })),
+    { t: 4.6, sfx: 'riser_short', gain: 0.3 }, { t: 5.0, sfx: 'impact', gain: 0.9 }, { t: 5.02, sfx: 'whoosh_up', gain: 0.6 }, { t: 7.0, sfx: 'stamp', gain: 0.7 }, { t: 7.5, sfx: 'stamp', gain: 0.6 }, { t: 8.0, sfx: 'stamp', gain: 0.6 }],
+  render(t) {
+    const OPEN_T0 = 0.9; if (t < 2) t = OPEN_T0 + (2 - OPEN_T0) * t / 2; // no blank opening: frame 0 starts mid-intro
+
+    // inks on their own layer: drawn, then eaten by riso grain, then multiplied onto the paper
+    ix.setTransform(k, 0, 0, k, 0, 0); ix.globalCompositeOperation = 'source-over'; ix.clearRect(0, 0, 1920, 1080);
+    // grid guides (pencil, printed faint)
+    EL.forEach((e, i) => { ix.globalCompositeOperation = 'multiply'; drawEl(ix, e, i, t); });
+    ix.globalCompositeOperation = 'source-over';
+    // type: stacked big words on the beat after the swap
+    const words = [C.t1, C.t2, C.t3];
+    words.forEach((w, i) => { const a = spring(t - (6.3 + i * 0.25), { k: 260, c: 18 }); if (t < 6.3 + i * 0.25) return;
+      ix.save(); ix.fillStyle = i === 1 ? COL.red : COL.blk; ix.font = '900 150px "Noto Sans CJK SC"'; ix.textBaseline = 'alphabetic';
+      ix.beginPath(); ix.rect(110, 235 + i * 170 - 150, 900, 175); ix.clip(); ix.fillText(w, 120 + (i === 1 ? 120 : 0), 235 + i * 170 + (1 - a) * 175); ix.restore(); });
+    ix.save(); ix.globalAlpha = E.outCubic(inv(6.8, 7.1, t)); ix.fillStyle = COL.blk; ix.font = '700 28px Inter'; ix.letterSpacing = '8px'; ix.fillText(C.en, 126, 690); ix.restore();
+    ix.save(); ix.fillStyle = COL.blk; ix.font = '800 46px "Inter Display"'; ix.globalAlpha = E.outCubic(inv(0.1, 0.6, t)); ix.textAlign = 'right'; ix.fillText(C.no, 1830, 1020); ix.font = '700 16px Inter'; ix.letterSpacing = '6px'; ix.fillText(C.sign, 1830, 70); ix.restore();
+    ix.globalCompositeOperation = 'destination-out'; ix.setTransform(1, 0, 0, 1, 0, 0); ix.drawImage(GRAIN, 0, 0);
+    // compose
+    out.begin(); g.setTransform(1, 0, 0, 1, 0, 0);
+    // camera: slight drift, a punch on the swap
+    const punch = 1 + 0.035 * Math.exp(-Math.pow((t - SWAP - 0.05) / 0.18, 2)) + 0.02 * E.inOutSine(clamp(t / 10));
+    g.translate(Wp / 2, Hp / 2); g.scale(punch, punch); g.rotate(-0.006 + 0.012 * E.inOutSine(clamp(t / 10))); g.translate(-Wp / 2, -Hp / 2);
+    g.drawImage(PAPER, 0, 0);
+    g.globalCompositeOperation = 'multiply'; g.globalAlpha = 0.94; g.drawImage(INK, 0, 0); g.globalAlpha = 1; g.globalCompositeOperation = 'source-over';
+    // flash of white on the downbeat (print slap)
+    const fl = Math.exp(-Math.pow((t - SWAP) / 0.05, 2)) * 0.25; if (fl > 0.01) { g.fillStyle = `rgba(255,252,240,${fl})`; g.fillRect(0, 0, Wp, Hp); }
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    const vg = g.createRadialGradient(Wp / 2, Hp / 2, Hp * 0.4, Wp / 2, Hp / 2, Wp * 0.65); vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(70,50,20,.22)'); g.fillStyle = vg; g.fillRect(0, 0, Wp, Hp);
+  },
+});
+</script></body></html>

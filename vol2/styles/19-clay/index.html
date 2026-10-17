@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="zh"><head><meta charset="utf-8"><title>19 黏土定格 · Clay Rocket</title>
+<script src="../../lib/core.js"></script><script src="../../lib/gl.js"></script><script src="../../lib/rm.js"></script>
+<style>
+  #cd{position:absolute;left:180px;width:420px;top:160px;text-align:center;font:900 300px 'Inter Display';color:#fff6e8;-webkit-text-stroke:10px #3a2a20;paint-order:stroke fill;text-shadow:0 14px 0 #3a2a20;opacity:0}
+  #ttl{position:absolute;left:170px;top:360px;text-align:left;font:900 140px 'Noto Sans CJK SC';color:#ffd34a;-webkit-text-stroke:12px #3a2a20;paint-order:stroke fill;text-shadow:0 14px 0 #3a2a20;opacity:0;letter-spacing:.06em}
+</style>
+</head><body><div id="stage"></div>
+<script>
+/* ===== 19 黏土定格 · 小火箭发射 =====
+   Stop-motion at 12 drawings a second. A plasticine rocket on a little clay planet: it wobbles, counts down,
+   squashes in anticipation, then launches on a stretch (the hook) out of a burst of clay smoke puffs, past clay clouds.
+   Raymarched plasticine: wrap diffuse, soft shadows, AO, thumbprint dents, macro depth of field, frame-to-frame jitter. */
+const { E, clamp, inv, lerp, hash } = Reel;
+const stage = Reel.makeStage('#9ccbe8');
+Reel.ownJitter = true;
+const C = Reel.cfg({ go: '小火箭出发' });
+const NP = 16;
+const rm = Reel.RM(stage, {
+  bloom: 0.3, th: 1.2, expo: 0.95, vig: 0.38, grain: 0.03, ca: 0.4, contrast: 1.1, sat: 1.3, bands: 8,
+  uniforms: `uniform vec3 uRo, uTa; uniform vec4 uRk; uniform vec4 uP[${NP}]; uniform float uFlame, uJ;`,
+  scene: `
+const int NP = ${NP};
+float thumb(vec3 p){ return (vnoise(p * 9.) - .5) * .018 + (vnoise(p * 23. + 3.) - .5) * .006; }
+float sdRocket(vec3 p, out float m){
+  // uRk: xyz base position, w stretch (1 = rest, <1 squash, >1 stretch)
+  vec3 q = p - uRk.xyz; float s = uRk.w; q.y /= s; q.xz *= sqrt(s);
+  float body = sdEllipsoid(q - vec3(0., .95, 0.), vec3(.36, .8, .36));
+  float nose = sdEllipsoid(q - vec3(0., 1.62, 0.), vec3(.2, .32, .2));
+  float fins = 1e5;
+  for (int i = 0; i < 3; i++){ float a = float(i) * 2.0944 + .3; vec3 r = rotY(a) * q; vec3 fq = r - vec3(.36, .36, 0.); fq.y += fq.x * .6; fins = min(fins, sdEllipsoid(fq, vec3(.2, .3, .06))); }
+  float win = length(q - vec3(0., 1.05, .33)) - .13;
+  float d = smin(body, nose, .08);
+  m = 1.; if (nose < body - .02) m = 2.; if (fins < d) { d = smin(d, fins, .05); m = 2.; }
+  if (win < d + .01) { m = 3.; d = min(d, win); }
+  return d * min(s, 1.) * .9;
+}
+vec2 map(vec3 p){
+  vec2 r = vec2(length(p - vec3(0., -30., 0.)) - 30., 0.);                          // clay planet
+  // trees & rocks
+  float tr = 1e5; vec3 T[3] = vec3[3](vec3(-1.7,0.,-.6), vec3(1.9,0.,-1.2), vec3(-2.6,0.,-2.4));
+  for (int i = 0; i < 3; i++){ vec3 q = p - T[i]; tr = min(tr, sdEllipsoid(q - vec3(0., .75, 0.), vec3(.38, .48, .38))); tr = min(tr, sdCapsule(q, vec3(0.), vec3(0., .5, 0.), .07)); }
+  if (tr < r.x) r = vec2(tr, 6.);
+  float rock = sdEllipsoid(p - vec3(.9, .05, .9), vec3(.32, .18, .26));
+  if (rock < r.x) r = vec2(rock, 7.);
+  // launch pad
+  float pad = sdRoundCylinder(p - vec3(0., .04, 0.), .36, .04, .05);
+  if (pad < r.x) r = vec2(pad, 8.);
+  // rocket (bounded)
+  if (length(p - uRk.xyz - vec3(0., 1., 0.)) - 1.4 * max(uRk.w, 1.) < r.x) { float m; float d = sdRocket(p, m); if (d < r.x) r = vec2(d, m); }
+  // smoke puffs
+  for (int i = 0; i < NP; i++){ if (uP[i].w < .01) continue; float d = length(p - uP[i].xyz) - uP[i].w; if (d < r.x) r = vec2(smin(r.x, d, .12), 4.); }
+  // flame
+  if (uFlame > .01) { vec3 q = p - uRk.xyz - vec3(0., -.05 - .35 * uFlame, 0.); float f = sdEllipsoid(q, vec3(.2, .45, .2) * uFlame); if (f < r.x) r = vec2(f, 5.); }
+  // clay clouds in the sky
+  vec3 CC[3] = vec3[3](vec3(-3.,4.6,-5.), vec3(2.6,6.2,-6.), vec3(-.4,8.,-4.5));
+  for (int i = 0; i < 3; i++){ vec3 q = p - CC[i]; if (length(q) - 1.35 > r.x) continue; float c = length(q - vec3(-.55,0.,0.)) - .42; c = smin(c, length(q - vec3(.05,.12,0.)) - .55, .2); c = smin(c, length(q - vec3(.62,0.,0.)) - .4, .2); c = max(c, -(q.y + .22)); if (c < r.x) r = vec2(c, 9.); }
+  return r;
+}
+vec3 k3(vec3 p){ const vec2 k = vec2(1.,-1.) * .002; return k.xyy*map(p+k.xyy).x + k.yyx*map(p+k.yyx).x + k.yxy*map(p+k.yxy).x + k.xxx*map(p+k.xxx).x; }
+vec3 nrm(vec3 p){ const vec2 k = vec2(1.,-1.) * .0015; vec3 n = normalize(k.xyy*map(p+k.xyy).x + k.yyx*map(p+k.yyx).x + k.yxy*map(p+k.yxy).x + k.xxx*map(p+k.xxx).x);
+  const float e = .01; float b0 = thumb(p); vec3 gb = vec3(thumb(p + vec3(e,0.,0.)) - b0, thumb(p + vec3(0.,e,0.)) - b0, thumb(p + vec3(0.,0.,e)) - b0) / e;
+  return normalize(n - (gb - n * dot(gb, n)) * 1.6); }
+vec2 march(vec3 ro, vec3 rd){ float t = .01; for (int i = 0; i < 110; i++){ vec2 h = map(ro + rd * t); if (h.x < .001 * t) return vec2(t, h.y); t += h.x * .9; if (t > 40.) break; } return vec2(-1.); }
+const vec3 LD = normalize(vec3(-.5, .8, .45));
+float shadow(vec3 ro){ float res = 1., t = .03; for (int i = 0; i < 20; i++){ float h = map(ro + LD * t).x; res = min(res, 8. * h / t); t += clamp(h, .06, .6); if (res < .01 || t > 10.) break; } return clamp(res, 0., 1.); }
+float ao(vec3 p, vec3 n){ float o = 0., s = 1.; for (int i = 0; i < 3; i++){ float h = .03 + .15 * float(i); o += (h - map(p + n * h).x) * s; s *= .7; } return clamp(1. - 2. * o, 0., 1.); }
+vec3 albedo(float m, vec3 p){
+  if (m < .5) return mix(vec3(.36,.68,.32), vec3(.44,.76,.36), vnoise(p * 2.));
+  if (m < 1.5) return vec3(.95,.9,.8);
+  if (m < 2.5) return vec3(.88,.2,.16);
+  if (m < 3.5) return vec3(.3,.66,.95);
+  if (m < 4.5) return vec3(.94,.92,.9);
+  if (m < 6.5) return vec3(.2,.52,.3);
+  if (m < 7.5) return vec3(.62,.55,.5);
+  if (m < 8.5) return vec3(.42,.4,.48);
+  return vec3(.97,.97,1.);
+}
+vec3 render(vec2 fc){
+  vec2 uv = (2. * fc - uRes) / uRes.y;
+  vec3 ro = uRo, rd = camMat(ro, uTa, 0.) * normalize(vec3(uv, 2.1));
+  vec3 sky = mix(vec3(.55,.78,.95), vec3(.32,.55,.86), clamp(rd.y * 1.6, 0., 1.));
+  sky = mix(sky, vec3(1.,.93,.75), .35 * smoothstep(.95, .99, dot(rd, normalize(vec3(.6,.35,-.7)))));   // clay sun glow
+  sky += vec3(1.,.85,.4) * smoothstep(.992, .995, dot(rd, normalize(vec3(.6,.35,-.7))));
+  vec2 h = march(ro, rd);
+  if (h.x < 0.) { gDepth = 40.; return sky; }
+  vec3 p = ro + rd * h.x; gDepth = h.x;
+  if (h.y > 4.5 && h.y < 5.5) return mix(vec3(1.,.55,.1), vec3(1.,.95,.5), .5 + .5 * sin(uTime * 40.)) * 3.;
+  vec3 n = nrm(p);
+  vec3 a = albedo(h.y, p);
+  vec3 ng = normalize(k3(p)); float sh = shadow(p + ng * .04), oc = ao(p, ng);
+  float wrap = clamp((dot(n, LD) + .4) / 1.4, 0., 1.);
+  vec3 col = a * vec3(1.,.95,.86) * 1.6 * wrap * (.25 + .75 * sh);
+  col += a * vec3(.55,.68,.9) * .45 * oc * (.6 + .4 * n.y);
+  col += a * a * .35 * pow(1. - max(dot(n, -rd), 0.), 2.5);                       // plasticine translucency at grazing angles
+  col += vec3(1.) * .12 * pow(max(dot(reflect(rd, n), LD), 0.), 18.) * sh;        // soft waxy sheen
+  if (uFlame > .01) col += vec3(1.,.55,.15) * uFlame * 1.4 * exp(-length(p - uRk.xyz) * 1.4);   // flame glow on surroundings
+  col = mix(col, sky, smoothstep(10., 30., h.x));
+  return col;
+}`,
+});
+const cd = document.createElement('div'); cd.id = 'cd'; stage.appendChild(cd);
+const ttl = document.createElement('div'); ttl.id = 'ttl'; ttl.textContent = C.go; stage.appendChild(ttl);
+const LIFT = 4.25;
+Reel.scene({
+  duration: 10, fps: 30,
+  fonts: ['900 300px "Inter Display"', '900 140px "Noto Sans CJK SC"'],
+  frameKey: (t) => Math.floor(t * 12 + 1e-6),
+  cues: [{ t: 0.1, sfx: 'squish', gain: 0.6 }, { t: 1.0, sfx: 'squish', gain: 0.4 }, { t: 2.2, sfx: 'beep', gain: 0.7 }, { t: 2.9, sfx: 'beep', gain: 0.7 }, { t: 3.6, sfx: 'beep', gain: 0.8 },
+    { t: 3.9, sfx: 'stretch', gain: 0.6 }, { t: 4.25, sfx: 'impact', gain: 0.9 }, { t: 4.27, sfx: 'whoosh_up', gain: 0.9 }, { t: 4.4, sfx: 'blob', gain: 0.6 }, { t: 4.7, sfx: 'blob', gain: 0.5 }, { t: 8.0, sfx: 'boing', gain: 0.6 }, { t: 8.2, sfx: 'sparkle', gain: 0.5 }],
+  render(tIn) {
+    const f = Math.floor(tIn * 12 + 1e-6), t = f / 12;
+    const J = (k) => (hash(f * 3.17 + k) - 0.5);                                   // stop-motion handling jitter
+    // rocket
+    let y = 0, st = 1 + 0.03 * Math.sin(t * 5);
+    if (t > 3.6 && t < LIFT) st = 1 - 0.18 * E.inOutSine(inv(3.6, LIFT, t));           // anticipation squash
+    if (t >= LIFT) { const u = t - LIFT; y = 0.5 * u * u * (1 + u * 0.3); st = 1 + 0.35 * Math.exp(-u * 2.5); }
+    const rk = [J(1) * 0.012, y, J(2) * 0.012, st];
+    const flame = t >= LIFT ? Math.min(1, (t - LIFT) * 6) * (0.85 + 0.15 * Math.sin(f * 2.1)) : (t > 3.9 ? 0.3 * inv(3.9, LIFT, t) : 0);
+    // smoke puffs bloom around the pad, then drift
+    const P = new Float32Array(NP * 4);
+    const yAt = (tt) => { const u = Math.max(0, tt - LIFT); return 0.5 * u * u * (1 + u * 0.3); };
+    for (let i = 6; i < NP; i++) { const ts = LIFT + 0.6 + (i - 6) * 0.3, u = t - ts; if (u <= 0) continue; P.set([(hash(i) - 0.5) * 0.3, yAt(ts) - 0.2, (hash(i + 2) - 0.5) * 0.3, (0.32 + 0.1 * hash(i)) * E.outBack(clamp(u / 0.4)) * (1 + 0.4 * clamp(u / 3))], i * 4); }
+    for (let i = 0; i < 6; i++) { const a = i / 6 * 6.283 + 0.4, u = t - LIFT - i * 0.03; if (u <= 0) continue;
+      const r = (0.25 + 0.9 * E.outCubic(clamp(u / 1.2))) * (0.7 + 0.5 * hash(i)); const lift = i % 3 === 0 ? u * 0.25 : 0.05;
+      P.set([Math.cos(a) * r * 1.2, 0.15 + lift + 0.1 * hash(i + 3), Math.sin(a) * r * 1.0, (0.22 + 0.28 * hash(i + 7)) * E.outBack(clamp(u / 0.5)) * (1 - 0.3 * clamp((u - 2) / 3))], i * 4); }
+    // camera: orbit low, then tilt up to follow the rocket
+    const follow = E.inOutSine(inv(LIFT + 0.3, 7.5, t));
+    const ang = 0.5 - 0.35 * E.inOutSine(clamp(t / 10));
+    const ry = Math.min(y, 12.5);
+    const ro = [Math.sin(ang) * lerp(4.4, 6.2, follow) + J(3) * 0.01, lerp(1.1, 1.6 + ry * 0.8, follow) + J(4) * 0.01, Math.cos(ang) * lerp(4.4, 6.2, follow)];
+    const taF = [0, lerp(0.95, ry + 1.3, follow), 0];
+    const back = E.inOutCubic(inv(7.3, 8.7, t));
+    const roB = [Math.sin(ang) * 13, 2.6, Math.cos(ang) * 13];
+    for (let k = 0; k < 3; k++) ro[k] = lerp(ro[k], roB[k], back);
+    const ta = [0, lerp(taF[1], 4.2, back), 0];
+    rm.set('uRo', ro).set('uTa', ta).set('uRk', rk).set('uFlame', flame);
+    rm.set('uP', P);
+    const fd = Math.hypot(ro[0] - rk[0], ro[1] - (rk[1] + 1), ro[2] - rk[2]);
+    rm.render(t, { focus: lerp(fd, 13, back), aperture: 10, maxCoc: 10 });
+    // countdown overlay (clay-like chunky numbers)
+    const cdT = [[2.2, '3'], [2.9, '2'], [3.6, '1']]; let shown = '', sc = 1;
+    for (const [t0, s] of cdT) if (t >= t0 && t < t0 + 0.62) { shown = s; sc = 1 + 0.3 * Math.exp(-(t - t0) * 10); }
+    cd.textContent = shown; cd.style.opacity = shown ? 1 : 0; cd.style.transform = `scale(${sc}) rotate(${J(9) * 4}deg)`;
+    const ta2 = t > 6.6 ? 1 : 0; ttl.style.opacity = ta2; ttl.style.transform = `scale(${t > 6.6 ? 1 + 0.25 * Math.exp(-(t - 6.6) * 8) : 0.5}) rotate(${-3 + J(11) * 3}deg)`;
+  },
+});
+</script></body></html>
